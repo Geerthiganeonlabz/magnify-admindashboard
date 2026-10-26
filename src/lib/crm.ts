@@ -61,33 +61,6 @@ export interface Target {
 }
 export const DEFAULT_TARGET: Target = { monthlyOrders: 0, salesAmount: 0, dailyCalls: 0, dailyLeads: 0 };
 
-const mk = (id: string, ago: number, business: string, phone: string, source: string, result = '', status: LeadStatus = 'New'): Lead => ({
-  id,
-  dateAdded: new Date(Date.now() - ago * 86400000).toISOString(),
-  business,
-  phone,
-  source,
-  callStatus: 'Not Contacted',
-  result,
-  product: '',
-  status,
-  nextFollowUp: '',
-  owner: '',
-  email: '',
-  address: '',
-  notes: '',
-  history: [],
-});
-
-export const SEED_LEADS: Lead[] = [
-  mk('ML001', 3, 'ABC Restaurant', '+94 77 512 4360', 'Google Maps'),
-  mk('ML002', 3, 'City Cafe', '+94 71 220 4488', 'Google Maps'),
-  mk('ML003', 2, 'Kumar Stores', '+94 76 545 6789', 'Referral'),
-  mk('ML004', 2, 'Fresh Mart', '+94 70 118 3345', 'Google Maps'),
-  mk('ML005', 1, 'Green Hotel', '+94 75 902 1170', 'Referral'),
-  mk('ML006', 0, 'Royal Bakery', '+94 77 764 2201', 'Facebook'),
-];
-
 /* ---------- storage ---------- */
 function bc(): BroadcastChannel | null {
   try {
@@ -100,13 +73,13 @@ function bc(): BroadcastChannel | null {
 export function readLeads(): Lead[] {
   try {
     const raw = localStorage.getItem(LEADS_KEY);
-    if (!raw) return SEED_LEADS;
+    if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (Array.isArray(parsed)) return (parsed as Lead[]).map((l) => ({ email: '', address: '', notes: '', ...l }));
   } catch (e) {
     console.error('Could not read leads.', e);
   }
-  return SEED_LEADS;
+  return [];
 }
 
 export function writeLeads(leads: Lead[]): void {

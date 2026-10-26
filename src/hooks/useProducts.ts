@@ -48,7 +48,8 @@ const mapProduct = (product: ApiProduct): Product => {
     series: product.category?.trim() || '',
     price: Number(product.price ?? 0),
     manufactureCost: Number(product.manufactureCost ?? product.unitCost ?? product.costPrice ?? 0),
-    isActive: product.isActive ?? stockCount > 0,
+    // Disabled manually (isActive false) or automatically when there is no stock.
+    isActive: product.isActive !== false && stockCount > 0,
     imagecount: Number(product.imagecount ?? 0), // <-- ADD THIS
     stockCount,
     stockStatus: toStockStatus(product.status, stockCount),

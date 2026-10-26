@@ -1,5 +1,7 @@
 import { Eye, Pencil } from 'lucide-react';
 import type { Product } from '@/types/product';
+import { readInventory } from '@/lib/inventoryStore';
+import { readMaterials, materialCost } from '@/lib/materials';
 
 interface ProductTableProps {
   products: Product[];
@@ -14,6 +16,7 @@ const money = (n: number) =>
 
 export default function ProductTable({ products, togglingId, onView, onEdit, onToggle }: ProductTableProps) {
   const rows = Array.isArray(products) ? products : [];
+  const inventory = rows.length ? readInventory() : [];
 
   return (
     <div className="min-h-0 flex-1 overflow-auto">
@@ -41,9 +44,9 @@ export default function ProductTable({ products, togglingId, onView, onEdit, onT
             </tr>
           ) : (
             rows.map((p, index) => {
-              const cost = Number(p.manufactureCost ?? 0);
+              const mats = readMaterials(p.sku || p.id);
+              const cost = mats.some((m) => m.qty > 0) ? materialCost(mats, inventory) : Number(p.manufactureCost ?? 0);
               const profit = p.price - cost;
-              const margin = p.price > 0 ? (profit / p.price) * 100 : 0;
               const depleted = p.stockCount <= 0;
               const images =
                 Number(p.imagecount) || (p.galleryImageUrls?.length ?? 0) + (p.primaryImageUrl ? 1 : 0);
@@ -82,10 +85,6 @@ export default function ProductTable({ products, togglingId, onView, onEdit, onT
                     <p className="text-xs font-bold text-emerald-600">
                       {profit >= 0 ? '+' : '-'}LKR {Math.abs(profit).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                     </p>
-                    <p className="text-xs font-semibold text-emerald-500">
-                      {profit >= 0 ? '+' : ''}
-                      {margin.toFixed(1)}%
-                    </p>
                   </td>
                   <td className="px-4 py-3">
                     <span className="inline-flex whitespace-nowrap rounded-full bg-[#F1F5F9] px-2.5 py-1 text-xs font-medium text-[#64748B]">
@@ -95,11 +94,18 @@ export default function ProductTable({ products, togglingId, onView, onEdit, onT
                   <td className="px-4 py-3">
                     <span
                       className={`inline-flex whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-bold ${
-                        depleted ? 'bg-rose-50 text-rose-500' : 'bg-[#F1F5F9] text-[#0F172A]'
+                        depleted
+                          ? 'bg-rose-50 text-rose-500'
+                          : p.stockCount <= 10
+                            ? 'bg-amber-50 text-amber-600'
+                            : 'bg-[#F1F5F9] text-[#0F172A]'
                       }`}
                     >
                       {p.stockCount} units
                     </span>
+                    {!depleted && p.stockCount <= 10 && (
+                      <p className="mt-1 text-xs font-semibold text-amber-600">Low stock</p>
+                    )}
                   </td>
                   <td className="sticky right-0 z-[1] bg-white px-4 py-3 shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.15)] md:static md:shadow-none">
                     <div className="flex items-center justify-center gap-1.5">

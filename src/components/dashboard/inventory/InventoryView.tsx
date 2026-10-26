@@ -160,7 +160,7 @@ export default function InventoryView() {
                       <td className="px-5 py-3.5 text-xs font-medium text-[#64748B]">{i.id}</td>
                       <td className="px-5 py-3.5">
                         <p className="text-xs font-bold text-[#0F172A]">{i.name}</p>
-                        <p className="text-xs text-[#94A3B8]">{i.description || '—'}</p>
+                        {i.description && <p className="text-xs text-[#94A3B8]">{i.description}</p>}
                       </td>
                       <td className={`px-5 py-3.5 text-center text-xs font-bold ${meta.num}`}>{i.stock}</td>
                       <td className="px-5 py-3.5 text-center">

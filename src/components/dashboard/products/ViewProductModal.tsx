@@ -1,9 +1,23 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { X, History, ChevronLeft, ChevronRight } from 'lucide-react';
+import {
+  X,
+  ChevronLeft,
+  ChevronRight,
+  Boxes,
+  Clock,
+  Package,
+  Pencil,
+  Tag,
+  TrendingUp,
+  Wallet,
+  type LucideIcon,
+} from 'lucide-react';
 import type { Product } from '@/types/product';
 import { apiV1Url } from '@/lib/backendUrl';
+import { readInventory } from '@/lib/inventoryStore';
+import { readMaterials, materialCost } from '@/lib/materials';
 
 interface ViewProductModalProps {
   isOpen: boolean;
@@ -99,7 +113,27 @@ export default function ViewProductModal({
   };
 
   const currentStatus = getStatus(currentStock);
-  const unitProfit = Number(product.price ?? 0) - Number(product.manufactureCost ?? 0);
+  // Manufacture cost follows the product's materials (inventory unit values) when they exist.
+  const materials = readMaterials(product.sku || product.id);
+  const manufactureCost = materials.some((m) => m.qty > 0)
+    ? materialCost(materials, readInventory())
+    : Number(product.manufactureCost ?? 0);
+  const price = Number(product.price ?? 0);
+  const unitProfit = price - manufactureCost;
+  const margin = price > 0 ? (unitProfit / price) * 100 : 0;
+  const lkr = (n: number) => `LKR ${n.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+
+  const statusTone =
+    currentStatus === 'In Stock'
+      ? { pill: 'bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500', text: 'text-emerald-600' }
+      : currentStatus === 'Low Stock'
+        ? { pill: 'bg-amber-50 text-amber-700', dot: 'bg-amber-500', text: 'text-amber-600' }
+        : { pill: 'bg-rose-50 text-rose-700', dot: 'bg-rose-500', text: 'text-rose-600' };
+
+  const mainImage = activeGalleryImage || product.primaryImageUrl;
+  const thumbnails = Array.from(
+    new Set([product.primaryImageUrl, ...galleryImages].filter((u): u is string => Boolean(u))),
+  );
 
   const fetchStockLog = async (page: number) => {
     if (!product) return;
@@ -184,113 +218,123 @@ export default function ViewProductModal({
       );
 
   return (
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 p-3 backdrop-blur-sm sm:p-5">
-      <div className="relative z-[1000] flex max-h-[94vh] w-full max-w-[760px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-        <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-5 py-4 sm:px-6 sm:py-5">
-          <div>
-            <h2 className="text-lg font-bold text-[#002B73] sm:text-xl">
-              View Product
-            </h2>
-
-            <p className="mt-0.5 text-xs text-slate-500 sm:text-sm">
-              Product details and stock information
-            </p>
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-900/50 p-3 backdrop-blur-sm sm:p-5" onClick={onClose}>
+      <div
+        className="relative z-[1000] flex max-h-[94vh] w-full max-w-[900px] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Product details"
+      >
+        <div className="flex shrink-0 items-start justify-between gap-4 px-5 pb-4 pt-5 sm:px-7 sm:pt-6">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1 rounded-md bg-[#EFF6FF] px-2 py-1 text-[11px] font-bold tracking-wide text-[#2563EB]">
+                <Tag size={11} /> {product.sku || product.id}
+              </span>
+              {product.series && (
+                <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">{product.series}</span>
+              )}
+              <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold ${statusTone.pill}`}>
+                <span className={`size-1.5 rounded-full ${statusTone.dot}`} />
+                {currentStatus}
+              </span>
+            </div>
+            <h2 className="mt-2.5 break-words text-xl font-bold tracking-tight text-[#0F172A] sm:text-2xl">{product.name}</h2>
           </div>
 
           <button
             type="button"
             onClick={onClose}
-            className="flex h-9 w-9 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+            className="flex size-9 shrink-0 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
             aria-label="Close modal"
           >
             <X size={19} />
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-5 sm:px-6 sm:py-6">
-          <div className="grid grid-cols-1 gap-4 sm:gap-5">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[220px_minmax(0,1fr)]">
-              <div>
-                <div className="flex h-[200px] w-full items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-[#F8F8FB]">
-                  {(activeGalleryImage || product.primaryImageUrl) ? (
-                    <img src={activeGalleryImage || product.primaryImageUrl} alt={product.name} className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="h-[70%] w-[70%] border-[8px] border-[#A67C52] bg-white" />
-                  )}
-                </div>
-                {galleryImages.length > 0 && (
-                  <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
-                    {[product.primaryImageUrl, ...galleryImages].filter(Boolean).map((url, idx) => (
-                      <button
-                        key={`${url}-${idx}`}
-                        type="button"
-                        onClick={() => setActiveGalleryImage(url as string)}
-                        className="h-12 w-12 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50 hover:opacity-80"
-                        aria-label={`View image ${idx + 1}`}
-                      >
-                        <img src={url as string} alt={`${product.name} ${idx + 1}`} className="h-full w-full object-cover" />
-                      </button>
-                    ))}
+        <div className="flex-1 overflow-y-auto px-5 pb-6 sm:px-7">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-[340px_minmax(0,1fr)]">
+            {/* Gallery */}
+            <div>
+              <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-[#F8FAFC]">
+                {mainImage ? (
+                  <img src={mainImage} alt={product.name} className="h-full w-full object-cover" />
+                ) : (
+                  <div className="flex flex-col items-center gap-2 text-slate-300">
+                    <Package size={44} strokeWidth={1.5} />
+                    <span className="text-xs font-semibold">No image</span>
                   </div>
                 )}
               </div>
-
-              <div className="min-w-0">
-                <span className="inline-flex rounded-md bg-[#EFF6FF] px-2 py-1 text-xs font-bold text-[#2563EB]">{product.sku || product.id}</span>
-                <h3 className="mt-2 break-words text-base font-bold text-[#0F172A]">{product.name}</h3>
-                {product.series && <p className="mt-0.5 text-xs font-semibold text-slate-500">{product.series}</p>}
-                <p className="mb-1 mt-3 text-xs font-bold uppercase tracking-wide text-slate-400">Description</p>
-                <p className="text-xs leading-5 text-slate-600">{product.description || 'No description provided.'}</p>
-              </div>
+              {thumbnails.length > 1 && (
+                <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+                  {thumbnails.map((url, idx) => (
+                    <button
+                      key={`${url}-${idx}`}
+                      type="button"
+                      onClick={() => setActiveGalleryImage(url)}
+                      className={`size-16 shrink-0 overflow-hidden rounded-xl border-2 bg-slate-50 transition ${
+                        url === mainImage ? 'border-[#2563EB]' : 'border-transparent opacity-70 hover:opacity-100'
+                      }`}
+                      aria-label={`View image ${idx + 1}`}
+                    >
+                      <img src={url} alt={`${product.name} ${idx + 1}`} className="h-full w-full object-cover" />
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-              <ProductInfo label="Manufacture Cost" value={`LKR ${Number(product.manufactureCost ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
-              <ProductInfo label="Selling Price" value={`LKR ${Number(product.price ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
-              <ProductInfo
-                label="Unit Profit"
-                value={`${unitProfit >= 0 ? '+' : '-'}LKR ${Math.abs(unitProfit).toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
-                tone={unitProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}
-              />
-              <ProductInfo label="Stock" value={`${currentStock} units`} />
-              <ProductInfo label="Stock Status" value={currentStatus} tone={currentStatus === 'In Stock' ? 'text-emerald-600' : currentStatus === 'Low Stock' ? 'text-amber-500' : 'text-rose-600'} />
-            </div>
-
-            <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-[#F5F6FB] p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
-              <div className="min-w-0">
-                <h4 className="text-sm font-bold text-[#002B73] sm:text-base">
-                  Last Updated
-                </h4>
-
-                <p className="mt-1 text-xs font-medium leading-5 text-slate-500 sm:text-sm">
-                  Updated by{' '}
-                  <span className="font-bold text-[#1A1C1F]">
-                    {product.lastUpdatedBy || 'Admin'}
-                  </span>{' '}
-                  on{' '}
-                  {product.lastUpdatedDate
-                    ? new Date(
-                        product.lastUpdatedDate,
-                      ).toLocaleDateString()
-                    : 'Today'}
-                </p>
+            {/* Details */}
+            <div className="min-w-0 space-y-4">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Description</p>
+                <p className="mt-1 text-sm leading-6 text-slate-600">{product.description || 'No description provided.'}</p>
               </div>
 
-              <button
-                type="button"
-                onClick={handleViewLog}
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-white px-3 py-2.5 text-xs font-bold text-[#002B73] shadow-sm transition hover:bg-slate-50 sm:w-auto sm:text-sm"
-              >
-                <span>
-                  {showLog ? 'Hide Log' : 'View Log'}
-                </span>
+              <div className="rounded-2xl bg-gradient-to-br from-[#0B2F8F] to-[#071C40] p-5 text-white">
+                <div className="flex items-end justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-blue-200">Selling price</p>
+                    <p className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">{lkr(price)}</p>
+                  </div>
+                  <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold ${unitProfit >= 0 ? 'bg-emerald-400/20 text-emerald-200' : 'bg-rose-400/20 text-rose-200'}`}>
+                    <TrendingUp size={13} className={unitProfit < 0 ? 'rotate-180' : ''} />
+                    {margin.toFixed(1)}% margin
+                  </span>
+                </div>
+              </div>
 
-                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#F1F5FF]">
-                  <History size={15} />
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <ProductInfo icon={Wallet} label="Manufacture cost" value={lkr(manufactureCost)} />
+                <ProductInfo
+                  icon={TrendingUp}
+                  label="Unit profit"
+                  value={`${unitProfit >= 0 ? '+' : '-'}${lkr(Math.abs(unitProfit))}`}
+                  tone={unitProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}
+                />
+                <ProductInfo icon={Boxes} label="In stock" value={`${currentStock} units`} tone={statusTone.text} />
+              </div>
+
+              <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-[#F8FAFC] px-4 py-3">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white text-slate-400 shadow-xs">
+                  <Clock size={16} />
                 </span>
-              </button>
+                <div className="min-w-0 text-xs leading-5 text-slate-500">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Last updated</p>
+                  <p>
+                    by <span className="font-bold text-[#0F172A]">{product.lastUpdatedBy || 'Admin'}</span> on{' '}
+                    <span className="font-semibold text-slate-700">
+                      {product.lastUpdatedDate ? new Date(product.lastUpdatedDate).toLocaleDateString() : 'Today'}
+                    </span>
+                  </p>
+                </div>
+              </div>
             </div>
+          </div>
 
+          <div className="mt-6">
             {showLog && (
               <div>
                 <h3 className="mb-3 text-base font-bold text-[#002B73] sm:text-lg">
@@ -532,11 +576,11 @@ export default function ViewProductModal({
           </div>
         </div>
 
-        <div className="flex shrink-0 justify-end gap-2 border-t border-slate-100 bg-[#FAFAFA] px-5 py-4 sm:px-6">
+        <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-slate-100 bg-[#FAFAFA] px-5 py-4 sm:px-7">
           <button
             type="button"
             onClick={onClose}
-            className="flex h-10 flex-1 items-center justify-center rounded-lg border border-slate-200 bg-white px-6 text-xs font-semibold text-slate-600 hover:bg-slate-50 sm:min-w-[110px] sm:flex-none"
+            className="flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-6 text-xs font-semibold text-slate-600 hover:bg-slate-50"
           >
             Close
           </button>
@@ -544,9 +588,9 @@ export default function ViewProductModal({
             <button
               type="button"
               onClick={() => onEdit(product)}
-              className="flex h-10 flex-1 items-center justify-center rounded-lg bg-[#2563EB] px-6 text-xs font-bold text-white hover:bg-[#1D4ED8] sm:min-w-[130px] sm:flex-none"
+              className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl bg-[#2563EB] px-6 text-xs font-bold text-white shadow-sm hover:bg-[#1D4ED8]"
             >
-              Edit Product
+              <Pencil size={13} /> Edit Product
             </button>
           )}
         </div>
@@ -556,16 +600,20 @@ export default function ViewProductModal({
 }
 
 interface ProductInfoProps {
+  icon: LucideIcon;
   label: string;
   value: string;
   tone?: string;
 }
 
-function ProductInfo({ label, value, tone = 'text-[#0F172A]' }: ProductInfoProps) {
+function ProductInfo({ icon: Icon, label, value, tone = 'text-[#0F172A]' }: ProductInfoProps) {
   return (
-    <div className="min-w-0 rounded-xl border border-slate-200 bg-[#F8FAFC] p-3">
-      <p className="text-xs font-semibold text-slate-400">{label}</p>
-      <p className={`mt-1 truncate text-xs font-bold ${tone}`}>{value}</p>
+    <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-3.5">
+      <span className="flex size-8 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+        <Icon size={15} />
+      </span>
+      <p className="mt-2.5 text-[11px] font-semibold text-slate-400">{label}</p>
+      <p className={`mt-0.5 truncate text-sm font-bold ${tone}`}>{value}</p>
     </div>
   );
 }

@@ -1,10 +1,14 @@
 export type InventoryStatus = 'in-stock' | 'low-stock' | 'out-of-stock';
 
+export const STOCK_REASONS = ['Initial Stock', 'Purchased', 'Damaged', 'Used', 'Returned', 'Correction'] as const;
+export type StockReason = (typeof STOCK_REASONS)[number];
+
 export interface StockLogEntry {
   at: string; // ISO
   role: 'Admin/Director' | 'Warehouse Lead' | 'Purchasing Manager';
   change: number; // +50 / -20
   totalValue: number; // stock value after change
+  reason?: StockReason;
 }
 
 export interface InventoryItem {
