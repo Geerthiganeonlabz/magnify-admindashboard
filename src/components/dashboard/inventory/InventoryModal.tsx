@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Eye, Plus, Calculator, FileText, Layers, History, Square } from 'lucide-react';
-import { type InventoryItem, getInventoryStatus } from '@/types/inventory';
+import { type InventoryItem, type StockReason, STOCK_REASONS, getInventoryStatus } from '@/types/inventory';
 import {
   ModalShell,
   TableFooter,
@@ -41,6 +41,8 @@ export default function InventoryModal({ mode, item, nextId, onClose, onSave }: 
   const [unit, setUnit] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [logPage, setLogPage] = useState(1);
+  const [showLog, setShowLog] = useState(false);
+  const [reason, setReason] = useState<StockReason>('Correction');
   const logRef = useRef<HTMLDivElement>(null);
 
   const open = mode !== null;
@@ -52,7 +54,13 @@ export default function InventoryModal({ mode, item, nextId, onClose, onSave }: 
     setUnit(item ? String(item.unitValue) : '');
     setError(null);
     setLogPage(1);
+    setShowLog(false);
+    setReason('Correction');
   }, [open, item]);
+
+  useEffect(() => {
+    if (showLog) logRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [showLog]);
 
   const stockNum = Number(stock) || 0;
   const unitNum = Number(unit) || 0;
@@ -72,7 +80,7 @@ export default function InventoryModal({ mode, item, nextId, onClose, onSave }: 
           description: '',
           stock: stockNum,
           unitValue: unitNum,
-          history: [{ at: now, role: 'Admin/Director', change: stockNum, totalValue: total }],
+          history: [{ at: now, role: 'Admin/Director', change: stockNum, totalValue: total, reason: 'Initial Stock' }],
         },
         true
       );
@@ -87,7 +95,7 @@ export default function InventoryModal({ mode, item, nextId, onClose, onSave }: 
           stock: stockNum,
           unitValue: unitNum,
           history:
-            diff !== 0 ? [{ at: now, role: 'Admin/Director', change: diff, totalValue: total }, ...item.history] : item.history,
+            diff !== 0 ? [{ at: now, role: 'Admin/Director', change: diff, totalValue: total, reason }, ...item.history] : item.history,
         },
         false
       );
@@ -113,7 +121,7 @@ export default function InventoryModal({ mode, item, nextId, onClose, onSave }: 
           </button>
         }
       >
-        <p className="-mt-2 mb-3 text-xs font-semibold text-[#2563EB]">{item.id}</p>
+        <p className="mb-3 mt-1 text-xs font-semibold text-[#2563EB]">{item.id}</p>
 
         <div className="flex items-center gap-3 rounded-xl bg-[#F8FAFC] p-3">
           <span className="flex size-11 items-center justify-center rounded-xl bg-[#ECFEFF] text-[#0891B2]">
@@ -162,14 +170,16 @@ export default function InventoryModal({ mode, item, nextId, onClose, onSave }: 
             </p>
             <button
               type="button"
-              onClick={() => logRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+              onClick={() => setShowLog((v) => !v)}
               className="inline-flex h-7 items-center gap-1 rounded-md bg-[#2563EB] px-3 text-xs font-semibold text-white hover:bg-[#1D4ED8]"
             >
-              <FileText size={12} /> Stock Log
+              <FileText size={12} /> {showLog ? 'Hide Log' : 'Stock Log'}
             </button>
           </div>
         </div>
 
+        {showLog && (
+          <>
         <h3
           className="mb-2 mt-4 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-[#64748B]"
         >
@@ -177,10 +187,10 @@ export default function InventoryModal({ mode, item, nextId, onClose, onSave }: 
         </h3>
         <div ref={logRef} className="overflow-hidden rounded-xl border border-[#E2E8F0]">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[420px] text-left">
+            <table className="w-full min-w-[500px] text-left">
               <thead className="bg-[#F8FAFC]">
                 <tr>
-                  {['Date & Time', 'User Role', 'Quantity', 'Total Stock Value'].map((h) => (
+                  {['Date & Time', 'User Role', 'Quantity', 'Reason', 'Total Stock Value'].map((h) => (
                     <th key={h} className="px-3 py-2.5 text-xs font-bold uppercase tracking-wide text-[#64748B]">
                       {h}
                     </th>
@@ -190,7 +200,7 @@ export default function InventoryModal({ mode, item, nextId, onClose, onSave }: 
               <tbody className="divide-y divide-[#F1F5F9]">
                 {logRows.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="py-6 text-center text-xs text-[#94A3B8]">
+                    <td colSpan={5} className="py-6 text-center text-xs text-[#94A3B8]">
                       No stock movements recorded yet.
                     </td>
                   </tr>
@@ -216,6 +226,15 @@ export default function InventoryModal({ mode, item, nextId, onClose, onSave }: 
                           {h.change >= 0 ? '+' : ''}
                           {h.change} units
                         </td>
+                        <td className="px-3 py-2.5">
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                              h.reason === 'Damaged' ? 'bg-rose-50 text-rose-600' : 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            {h.reason ?? '—'}
+                          </span>
+                        </td>
                         <td className="px-3 py-2.5 text-xs font-bold text-[#0F172A]">{lkr(h.totalValue)}</td>
                       </tr>
                     );
@@ -226,6 +245,8 @@ export default function InventoryModal({ mode, item, nextId, onClose, onSave }: 
           </div>
           <TableFooter page={logPage} pageSize={LOG_SIZE} total={item.history.length} noun="records" onPage={setLogPage} />
         </div>
+          </>
+        )}
       </ModalShell>
     );
   }
@@ -262,7 +283,7 @@ export default function InventoryModal({ mode, item, nextId, onClose, onSave }: 
         </>
       }
     >
-      <p className="-mt-2 mb-3 text-xs font-semibold text-[#2563EB]">{isAdd ? nextId : item?.id}</p>
+      <p className="mb-3 mt-1 text-xs font-semibold text-[#2563EB]">{isAdd ? nextId : item?.id}</p>
 
       <label className={labelCls}>
         Item Name <span className="text-rose-500">*</span>
@@ -311,6 +332,22 @@ export default function InventoryModal({ mode, item, nextId, onClose, onSave }: 
             </div>
           </div>
         </div>
+
+        {!isAdd && item && stockNum !== item.stock && (
+          <div className="mt-3">
+            <label className={labelCls}>
+              Reason for change ({stockNum - item.stock > 0 ? '+' : ''}
+              {stockNum - item.stock} units) <span className="text-rose-500">*</span>
+            </label>
+            <select value={reason} onChange={(e) => setReason(e.target.value as StockReason)} className={inputCls}>
+              {STOCK_REASONS.filter((r) => r !== 'Initial Stock').map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div className="mt-3 flex items-center gap-3 rounded-lg border border-[#DBEAFE] bg-[#EFF6FF] px-3 py-2.5">
           <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-[#2563EB] text-white">

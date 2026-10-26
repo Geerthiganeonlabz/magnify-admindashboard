@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Pencil, Plus, Trash2, UserRound } from 'lucide-react';
+import { Pencil, Plus, Trash2, UserRound, X } from 'lucide-react';
 import { ModalShell, btnGhost, btnPrimary, inputCls, labelCls, textareaCls } from '@/components/dashboard/shared/UiKit';
 import { apiV1Url } from '@/lib/backendUrl';
 import { CALL_STATUSES, LEAD_STATUSES, RESULTS, SOURCES, type CrmUser, type FollowUp, type Lead } from '@/lib/crm';
@@ -45,6 +45,7 @@ export default function LeadProfileModal({
   const [d, setD] = useState<Lead | null>(null);
   const [products, setProducts] = useState<string[]>([]);
   const [customProduct, setCustomProduct] = useState(false);
+  const [customName, setCustomName] = useState('');
   const [confirmDel, setConfirmDel] = useState<number | null>(null);
   const [err, setErr] = useState('');
 
@@ -56,7 +57,11 @@ export default function LeadProfileModal({
     fetch(apiV1Url('/products?page=1&limit=1000'), { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : []))
       .then((j: unknown) => {
-        const list = Array.isArray(j) ? j : ((j as { data?: unknown[] })?.data ?? (j as { products?: unknown[] })?.products ?? []);
+        // Handles [..], { data: [..] }, { products: [..] } and { data: { products: [..] } }.
+        const o = j as { data?: unknown; products?: unknown } | null;
+        const inner = o?.data as { products?: unknown } | null | undefined;
+        const found = [j, o?.data, o?.products, inner?.products].find((x) => Array.isArray(x));
+        const list = (found as unknown[] | undefined) ?? [];
         const names = (list as { productName?: string }[]).map((p) => p.productName).filter((n): n is string => !!n);
         if (alive) setProducts(names);
       })
@@ -70,6 +75,7 @@ export default function LeadProfileModal({
     if (!open || !lead) return;
     setD(JSON.parse(JSON.stringify(lead)) as Lead);
     setCustomProduct(false);
+    setCustomName('');
     setConfirmDel(null);
     setErr('');
     setRec(null);
@@ -80,7 +86,14 @@ export default function LeadProfileModal({
   const wasConverted = lead.status === 'Converted';
   const becomingConverted = d.status === 'Converted' && !wasConverted;
   const ownerLocked = !isAdmin;
-  const productIsCustom = customProduct || (!!d.product && products.length > 0 && !products.includes(d.product));
+  // Several products are stored as one comma separated string, e.g. "6 Magnets, Wooden Frame".
+  const selected = d.product.split(',').map((x) => x.trim()).filter(Boolean);
+  const setSelected = (list: string[]) => set('product', list.join(', '));
+  const addProduct = (name: string) => {
+    const n = name.trim();
+    if (!n || selected.some((x) => x.toLowerCase() === n.toLowerCase())) return;
+    setSelected([...selected, n]);
+  };
   const set = <K extends keyof Lead>(k: K, v: Lead[K]) => {
     setErr('');
     setD((p) => (p ? { ...p, [k]: v } : p));
@@ -136,7 +149,7 @@ export default function LeadProfileModal({
 
   const submit = () => {
     if (!d.business.trim()) return setErr('Business / customer name is required.');
-    if (!/^[+\d][\d\s-]{6,}$/.test(d.phone.trim())) return setErr('Enter a valid phone number.');
+    if (!/^\d{10}$/.test(d.phone.trim())) return setErr('Phone number must be exactly 10 digits (e.g. 0771234567).');
     if (d.email.trim() && !/^\S+@\S+\.\S+$/.test(d.email.trim())) return setErr('Enter a valid email address.');
     if (rec) return setErr('Save or cancel the call record you are editing first.');
     onSave({ lead: { ...d, business: d.business.trim(), phone: d.phone.trim(), email: d.email.trim(), address: d.address.trim(), notes: d.notes.trim() }, converting: becomingConverted });
@@ -183,7 +196,15 @@ export default function LeadProfileModal({
           </div>
           <div>
             <label className={labelCls}>Phone</label>
-            <input className={inputCls} value={d.phone} placeholder="+94 77 000 0000" onChange={(e) => set('phone', e.target.value)} />
+            <input
+              className={inputCls}
+              value={d.phone}
+              inputMode="numeric"
+              maxLength={10}
+              placeholder="0771234567"
+              onChange={(e) => set('phone', e.target.value.replace(/\D/g, '').slice(0, 10))}
+            />
+            <p className={`mt-1 text-xs ${d.phone && d.phone.length !== 10 ? 'text-rose-600' : 'text-[#94A3B8]'}`}>{d.phone.length}/10 digits</p>
           </div>
           <div>
             <label className={labelCls}>Source</label>
@@ -192,25 +213,49 @@ export default function LeadProfileModal({
             </select>
           </div>
           <div>
-            <label className={labelCls}>Interested product</label>
+            <label className={labelCls}>Interested products {selected.length > 0 && `(${selected.length})`}</label>
+            {selected.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-1.5">
+                {selected.map((p) => (
+                  <span key={p} className="inline-flex items-center gap-1 rounded-full border border-[#BFDBFE] bg-[#EFF6FF] px-2.5 py-1 text-xs font-semibold text-[#1D4ED8]">
+                    {p}
+                    <button type="button" aria-label={`Remove ${p}`} onClick={() => setSelected(selected.filter((x) => x !== p))} className="text-[#1D4ED8] hover:text-rose-600">
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
             <select
               className={inputCls}
-              value={productIsCustom ? CUSTOM : d.product}
+              value=""
               onChange={(e) => {
-                if (e.target.value === CUSTOM) {
-                  setCustomProduct(true);
-                  set('product', '');
-                } else {
-                  setCustomProduct(false);
-                  set('product', e.target.value);
-                }
+                if (e.target.value === CUSTOM) setCustomProduct(true);
+                else if (e.target.value) addProduct(e.target.value);
               }}
             >
-              <option value="">Select product</option>
-              {products.map((p) => <option key={p}>{p}</option>)}
+              <option value="">{selected.length ? 'Add another product...' : 'Select product'}</option>
+              {products.filter((p) => !selected.includes(p)).map((p) => <option key={p}>{p}</option>)}
               <option value={CUSTOM}>Custom product...</option>
             </select>
-            {productIsCustom && <input className={`${inputCls} mt-2`} value={d.product} placeholder="Custom product name" onChange={(e) => set('product', e.target.value)} />}
+            {customProduct && (
+              <div className="mt-2 flex gap-2">
+                <input
+                  className={inputCls}
+                  value={customName}
+                  placeholder="Custom product name"
+                  onChange={(e) => setCustomName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      addProduct(customName);
+                      setCustomName('');
+                    }
+                  }}
+                />
+                <button type="button" onClick={() => { addProduct(customName); setCustomName(''); }} className={btnPrimary}>Add</button>
+              </div>
+            )}
           </div>
           <div>
             <label className={labelCls}>Lead status</label>

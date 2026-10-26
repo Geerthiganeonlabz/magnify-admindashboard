@@ -2,7 +2,7 @@ import type { Order } from '@/types/order';
 import type { ReportDoc, Cell, Tone } from './reportPdf';
 import { INITIAL_INVENTORY } from '@/data/inventory';
 import { getInventoryStatus } from '@/types/inventory';
-import { INITIAL_DELIVERIES } from '@/data/deliveries';
+import { readDeliveries } from '@/lib/deliveryStore';
 import { readTransactions } from '@/components/dashboard/finance/financeStore';
 import { readLeads, readCrmUsers } from '@/lib/crm';
 import { fetchOrders } from '@/lib/orders';
@@ -44,8 +44,14 @@ export interface ReportData {
 
 const arr = (j: unknown): unknown[] => {
   if (Array.isArray(j)) return j;
-  const o = j as { data?: unknown; products?: unknown; customers?: unknown } | null;
-  for (const k of [o?.data, o?.products, o?.customers]) if (Array.isArray(k)) return k;
+  type Box = { data?: unknown; products?: unknown; customers?: unknown; items?: unknown };
+  const o = j as Box | null;
+  // Handles { data: [...] }, { products: [...] }, { customers: [...] } and { data: { products: [...] } }.
+  for (const k of [o?.data, o?.products, o?.customers, o?.items]) if (Array.isArray(k)) return k;
+  const inner = o?.data as Box | null | undefined;
+  if (inner && typeof inner === 'object') {
+    for (const k of [inner.products, inner.customers, inner.items, inner.data]) if (Array.isArray(k)) return k;
+  }
   return [];
 };
 
@@ -480,7 +486,7 @@ function payment(d: ReportData, r: Range): ReportDoc {
 }
 
 function delivery(r: Range): ReportDoc {
-  const list = INITIAL_DELIVERIES.filter((x) => inRange(localDay(x.date), r));
+  const list = readDeliveries().filter((x) => inRange(localDay(x.date), r));
   const cnt = (s: string) => list.filter((x) => x.status === s).length;
   const drivers = [...new Set(list.map((x) => x.driver).filter(Boolean))];
   const tone: Record<string, Tone> = { delivered: 'good', 'in-transit': 'info', pending: 'warn', returned: 'bad' };

@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useToastStore } from '@/store/toastStore';
 import { apiV1Url } from '@/lib/backendUrl';
+import { syncOrderStock } from '@/lib/orderStock';
 import type { Order, OrderStatus as OrderStatusType, PaymentStatus } from '@/types/order';
 import ShippingLabelModal from './ShippingLabelModal';
 
@@ -144,25 +145,37 @@ export default function OrderStatus({
     };
 
     try {
-      // Try backend update if API exists
-      if (currentOrder._id || currentOrder.id) {
-        await fetch(apiV1Url(`/orders/${currentOrder._id || currentOrder.id}`), {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            customerName,
-            phone,
-            email,
-            shippingAddress,
-            status: orderStatus.toUpperCase(),
-            paymentStatus,
-          }),
-        }).catch(() => null);
+      // Save to the database. Empty optional fields are left out so they are not validated/overwritten.
+      const res = await fetch(apiV1Url(`/orders/${currentOrder._id || currentOrder.id}/status`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: orderStatus.toUpperCase(),
+          paymentStatus,
+          ...(customerName.trim() ? { customerName: customerName.trim() } : {}),
+          ...(phone.trim() ? { phone: phone.trim() } : {}),
+          ...(email.trim() ? { email: email.trim() } : {}),
+          ...(shippingAddress.trim() ? { shippingAddress: shippingAddress.trim() } : {}),
+        }),
+      });
+      if (!res.ok) {
+        let message = 'Could not save order updates.';
+        try {
+          const j = (await res.json()) as { message?: string | string[] };
+          if (j?.message) message = Array.isArray(j.message) ? j.message.join(', ') : j.message;
+        } catch {
+          // Not a JSON error - usually the backend is not running (proxy answers HTTP 500).
+          if (res.status >= 500) message = `Server is not reachable (HTTP ${res.status}). Check that the backend is running.`;
+        }
+        addToast(message, 'error');
+        return;
       }
+
+      const stockMsg = await syncOrderStock(currentOrder, orderStatus).catch(() => null);
 
       setCurrentOrder(updated);
       onUpdated?.(updated);
-      addToast(`Order ${currentOrder.orderId} changes saved successfully.`, 'success');
+      addToast(`Order ${currentOrder.orderId} changes saved successfully.${stockMsg ? ' ' + stockMsg : ''}`, 'success');
     } catch {
       addToast('Could not save order updates.', 'error');
     } finally {
@@ -172,8 +185,8 @@ export default function OrderStatus({
 
   return (
     <>
-      <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-2 sm:p-4 backdrop-blur-xs">
-        <div className="flex h-full max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-[#F8FAFC] shadow-2xl">
+      <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-2 sm:p-4 backdrop-blur-xs" onClick={onClose}>
+        <div onClick={(e) => e.stopPropagation()} className="flex h-full max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-[#F8FAFC] shadow-2xl">
           {/* Header */}
           <div className="flex shrink-0 items-center justify-between border-b border-[#E2E8F0] bg-white px-6 py-4">
             <div className="flex flex-wrap items-center gap-3">

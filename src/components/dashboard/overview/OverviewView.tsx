@@ -6,7 +6,7 @@ import { Banknote, Boxes, ShoppingBag, TriangleAlert, Truck, UserPlus, type Luci
 import type { Order } from '@/types/order';
 import { loadReportData, type ReportData } from '@/components/dashboard/reports/reportBuilders';
 import { readTransactions, visibleTransactions } from '@/components/dashboard/finance/financeStore';
-import { INITIAL_DELIVERIES } from '@/data/deliveries';
+import { readDeliveries } from '@/lib/deliveryStore';
 import { readInventory } from '@/lib/inventoryStore';
 import StatCard from '@/components/dashboard/shared/StatCard';
 import { getInventoryStatus } from '@/types/inventory';
@@ -105,8 +105,9 @@ export default function OverviewView() {
     ].filter((x) => x.value > 0);
 
     const weekKeys = new Set(keys);
-    const del = INITIAL_DELIVERIES.filter((x) => weekKeys.has(x.date));
-    const delSrc = del.length ? del : INITIAL_DELIVERIES;
+    const allDeliveries = readDeliveries();
+    const del = allDeliveries.filter((x) => weekKeys.has(x.date));
+    const delSrc = del.length ? del : allDeliveries;
     const delivery = [
       { label: 'Delivered', value: delSrc.filter((x) => x.status === 'delivered').length, color: '#16A34A' },
       { label: 'In Transit', value: delSrc.filter((x) => x.status === 'in-transit').length, color: '#2563EB' },

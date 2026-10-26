@@ -104,7 +104,11 @@ export default function ProductsPage() {
   const paged = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   const handleToggle = async (product: Product) => {
-    const next = !(product.isActive !== false && product.stockCount > 0 ? true : Boolean(product.isActive));
+    if (!product.isActive && product.stockCount <= 0) {
+      addToast(`${product.name} has no stock. Add stock before enabling it.`, "error");
+      return;
+    }
+    const next = !product.isActive;
     setTogglingId(product.id);
     try {
       const res = await fetch(apiV1Url(`/products/${product.id}`), {
@@ -376,7 +380,7 @@ export default function ProductsPage() {
                 value={search}
                 onChange={(e) => { setSearch(e.target.value); setPage(1); }}
                 placeholder="Search by product name or ID..."
-                className="h-9 w-full rounded-lg border border-[#E2E8F0] bg-white pl-9 pr-3 text-xs placeholder:text-[#94A3B8] focus:border-[#2563EB] focus:outline-none"
+                className="h-9 w-full rounded-lg border border-[#E2E8F0] bg-white pl-9 pr-3 text-xs text-[#0F172A] placeholder:text-[#94A3B8] focus:border-[#2563EB] focus:outline-none"
               />
             </div>
             <div className="relative">

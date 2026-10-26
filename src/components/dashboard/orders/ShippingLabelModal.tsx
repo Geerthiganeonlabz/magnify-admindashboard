@@ -125,8 +125,8 @@ export default function ShippingLabelModal({ order, isOpen, onClose }: ShippingL
   const addressLine3 = addressParts.slice(3).join(', ') || '';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 sm:p-4 backdrop-blur-xs print:static print:bg-white print:p-0">
-      <div className="relative w-full max-w-3xl rounded-3xl bg-white p-4 sm:p-6 shadow-2xl print:max-w-none print:rounded-none print:p-0 print:shadow-none">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 sm:p-4 backdrop-blur-xs print:static print:bg-white print:p-0" onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} className="relative w-full max-w-3xl rounded-3xl bg-white p-4 sm:p-6 shadow-2xl print:max-w-none print:rounded-none print:p-0 print:shadow-none">
         {/* Modal Controls (Hidden in Print) */}
         <div className="mb-4 flex items-center justify-between border-b border-[#E2E8F0] pb-3 print:hidden">
           <div>

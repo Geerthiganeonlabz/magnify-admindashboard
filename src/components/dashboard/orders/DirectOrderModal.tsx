@@ -16,6 +16,7 @@ import {
 import type { Order, OrderItem } from '@/types/order';
 import { useToastStore } from '@/store/toastStore';
 import { useProducts } from '@/hooks/useProducts';
+import { mapApiOrder } from '@/lib/orders';
 
 interface DirectOrderModalProps {
   isOpen: boolean;
@@ -82,6 +83,7 @@ export default function DirectOrderModal({
   // Payment
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Cash');
   const [paymentNote, setPaymentNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   // Load existing customers for the search dropdown
   useEffect(() => {
@@ -204,13 +206,18 @@ export default function DirectOrderModal({
     onClose();
   };
 
-  const handleCreateOrder = () => {
+  const handleCreateOrder = async () => {
+    if (submitting) return;
     if (!customerQuery.trim()) {
       addToast('Please enter the customer name.', 'error');
       return;
     }
     if (!phone.trim()) {
       addToast('Please enter the customer phone number.', 'error');
+      return;
+    }
+    if (!/^\S+@\S+\.\S+$/.test(email.trim())) {
+      addToast('Please enter a valid customer email address.', 'error');
       return;
     }
     if (selectedItems.length === 0) {
@@ -220,59 +227,85 @@ export default function DirectOrderModal({
 
     const name = customerQuery.trim();
     const orderNo = `MG-${Date.now().toString().slice(-6)}`;
-    const newOrder: Order = {
-      id: String(Date.now()),
-      orderId: `#${orderNo}`,
-      customerName: name,
-      customerInitials:
-        name
-          .split(' ')
-          .map((p) => p[0])
-          .join('')
-          .toUpperCase()
-          .slice(0, 2) || '?',
-      customerId: selectedCustomerId || `C-${Math.floor(10000 + Math.random() * 90000)}`,
-      qty: itemCount,
-      status: 'pending',
-      paymentStatus: 'paid',
-      paymentMethod,
-      preferredLanguage: 'English',
-      allPhotosReceived: false,
-      email: email.trim(),
-      phone: phone.trim(),
-      shippingAddress: '',
-      adminNote: paymentNote.trim(),
-      subtotal,
-      deliveryFee: 0,
-      discount: 0,
-      totalValue: totalAmount,
-      createdAt: new Date().toISOString(),
-      items: selectedItems,
-    };
+    setSubmitting(true);
 
-    // Save a brand-new customer to the directory (best effort)
-    if (saveToDirectory && !selectedCustomerId) {
-      void fetch(`${API_BASE}/customers`, {
+    try {
+      // Save a brand-new customer to the directory first (staff-created = Manual). Ignore "already exists".
+      if (saveToDirectory && !selectedCustomerId) {
+        await fetch(`${API_BASE}/customers`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            customerName: name,
+            phoneNumber: phone.trim(),
+            emailAddress: email.trim(),
+          }),
+        }).catch(() => undefined);
+      }
+
+      // Save the order in the database so it is still there after a refresh.
+      const res = await fetch(`${API_BASE}/orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          orderId: `#${orderNo}`,
           customerName: name,
-          phoneNumber: phone.trim(),
-          emailAddress: email.trim(),
+          customerId: selectedCustomerId || `C-${Math.floor(10000 + Math.random() * 90000)}`,
+          email: email.trim(),
+          phone: phone.trim(),
+          qty: itemCount,
+          totalValue: totalAmount,
+          deliveryFee: 0,
+          shippingAddress: '',
+          adminNote: paymentNote.trim(),
+          paymentMethod,
+          paymentStatus: 'paid',
+          orderSource: 'direct',
+          items: selectedItems.map((it) => ({
+            productId: it.productId,
+            name: it.name,
+            price: it.price,
+            quantity: it.quantity,
+          })),
         }),
-      }).catch(() => undefined);
-    }
+      });
 
-    onOrderCreated(newOrder);
-    addToast(`Direct Order ${newOrder.orderId} created successfully.`, 'success');
-    handleClose();
+      if (!res.ok) {
+        let message = 'Could not create the order.';
+        try {
+          const j = (await res.json()) as { message?: string | string[] };
+          if (j?.message) message = Array.isArray(j.message) ? j.message.join(', ') : j.message;
+        } catch {
+          // Not a JSON error - usually the backend is not running (proxy answers HTTP 500).
+          if (res.status >= 500) message = `Server is not reachable (HTTP ${res.status}). Check that the backend is running.`;
+        }
+        addToast(message, 'error');
+        return;
+      }
+
+      const saved = (await res.json()) as Parameters<typeof mapApiOrder>[0];
+      const newOrder: Order = {
+        ...mapApiOrder(saved),
+        paymentStatus: 'paid',
+        items: selectedItems,
+        subtotal,
+      };
+
+      onOrderCreated(newOrder);
+      addToast(`Direct Order ${newOrder.orderId} created successfully.`, 'success');
+      handleClose();
+    } catch {
+      addToast('Could not reach the server. The order was not saved.', 'error');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const showCustomerDropdown = customerOpen && customerQuery.trim().length > 0;
 
   return (
-    <div className="direct-order-modal fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 backdrop-blur-xs sm:p-4">
-      <div className="flex max-h-[94vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+    <div className="direct-order-modal fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 backdrop-blur-xs sm:p-4" onClick={() => { if (!submitting) handleClose(); }}>
+      <div onClick={(e) => e.stopPropagation()} className="flex max-h-[94vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
         {/* Header */}
         <div className="flex shrink-0 items-center justify-between border-b border-[#E2E8F0] px-6 py-3.5">
           <div className="flex items-center gap-2.5">
@@ -663,9 +696,10 @@ export default function DirectOrderModal({
           <button
             type="button"
             onClick={handleCreateOrder}
-            className="h-9 rounded-lg bg-[#2563EB] px-5 text-xs font-bold text-white shadow-xs transition hover:bg-[#1D4ED8]"
+            disabled={submitting}
+            className="h-9 rounded-lg bg-[#2563EB] px-5 text-xs font-bold text-white shadow-xs transition hover:bg-[#1D4ED8] disabled:opacity-60"
           >
-            Create Order
+            {submitting ? 'Creating...' : 'Create Order'}
           </button>
         </div>
       </div>

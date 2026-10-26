@@ -25,6 +25,7 @@ import DirectOrderModal from '@/components/dashboard/orders/DirectOrderModal';
 import { fetchOrders } from '@/lib/orders';
 import { TableSkeleton } from '@/components/dashboard/shared/Skeleton';
 import { apiV1Url } from '@/lib/backendUrl';
+import { syncOrderStock } from '@/lib/orderStock';
 import type { Order, OrderStatus as OrderStatusType } from '@/types/order';
 import { useToastStore } from '@/store/toastStore';
 
@@ -153,34 +154,73 @@ export default function OrdersPage() {
   };
 
   // Bulk Status Update
-  const handleBulkUpdateStatus = (newStatus: OrderStatusType) => {
+  const apiError = async (res: Response, fallback: string) => {
+    try {
+      const j = (await res.json()) as { message?: string | string[] };
+      if (j?.message) return Array.isArray(j.message) ? j.message.join(', ') : j.message;
+    } catch {
+      // Not a JSON error - usually the backend is not running (proxy answers HTTP 500).
+      if (res.status >= 500) return `Server is not reachable (HTTP ${res.status}). Check that the backend is running.`;
+    }
+    return fallback;
+  };
+
+  const handleBulkUpdateStatus = async (newStatus: OrderStatusType) => {
     if (selectedIds.size === 0) return;
 
+    const done = new Set<string>();
+    let lastError = '';
+    for (const o of orders.filter((x) => selectedIds.has(x.id))) {
+      try {
+        const res = await fetch(apiV1Url(`/orders/${o._id || o.id}/status`), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            status: newStatus.toUpperCase(),
+            ...(newStatus === 'delivered' ? { paymentStatus: 'paid' } : {}),
+          }),
+        });
+        if (!res.ok) throw new Error(await apiError(res, `Could not update ${o.orderId}.`));
+        await syncOrderStock(o, newStatus).catch(() => null);
+        done.add(o.id);
+      } catch (e) {
+        lastError = e instanceof Error ? e.message : `Could not update ${o.orderId}.`;
+      }
+    }
+
     setOrders((prev) =>
-      prev.map((order) => {
-        if (selectedIds.has(order.id)) {
-          return {
-            ...order,
-            status: newStatus,
-            paymentStatus: newStatus === 'delivered' ? 'paid' : order.paymentStatus,
-          };
-        }
-        return order;
-      })
+      prev.map((order) =>
+        done.has(order.id)
+          ? { ...order, status: newStatus, paymentStatus: newStatus === 'delivered' ? 'paid' : order.paymentStatus }
+          : order
+      )
     );
 
-    addToast(`Updated ${selectedIds.size} orders to ${newStatus}.`, 'success');
+    if (done.size) addToast(`Updated ${done.size} order${done.size > 1 ? 's' : ''} to ${newStatus}.`, 'success');
+    if (lastError) addToast(lastError, 'error');
     setSelectedIds(new Set());
   };
 
   // Bulk Delete
-  const handleBulkDelete = () => {
+  const handleBulkDelete = async () => {
     if (selectedIds.size === 0) return;
-    const count = selectedIds.size;
 
-    setOrders((prev) => prev.filter((o) => !selectedIds.has(o.id)));
+    const deleted = new Set<string>();
+    let lastError = '';
+    for (const o of orders.filter((x) => selectedIds.has(x.id))) {
+      try {
+        const res = await fetch(apiV1Url(`/orders/${o._id || o.id}`), { method: 'DELETE' });
+        if (!res.ok) throw new Error(await apiError(res, `Could not delete ${o.orderId}.`));
+        deleted.add(o.id);
+      } catch (e) {
+        lastError = e instanceof Error ? e.message : `Could not delete ${o.orderId}.`;
+      }
+    }
+
+    setOrders((prev) => prev.filter((o) => !deleted.has(o.id)));
     setSelectedIds(new Set());
-    addToast(`Deleted ${count} orders successfully.`, 'success');
+    if (deleted.size) addToast(`Deleted ${deleted.size} order${deleted.size > 1 ? 's' : ''} successfully.`, 'success');
+    if (lastError) addToast(lastError, 'error');
   };
 
   // Export (All or Selected)

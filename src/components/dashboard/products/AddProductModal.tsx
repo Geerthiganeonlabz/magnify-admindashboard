@@ -6,7 +6,7 @@ import { ImagePlus, Images, Trash2, UploadCloud, X, Package } from 'lucide-react
 import type { Product, ProductFormData } from '@/types/product';
 import MaterialsEditor from './MaterialsEditor';
 import { readInventory } from '@/lib/inventoryStore';
-import { type Material, readMaterials, writeMaterials, materialCost } from '@/lib/materials';
+import { type Material, readMaterials, writeMaterials, materialCost, producibleUnits } from '@/lib/materials';
 import type { InventoryItem } from '@/types/inventory';
 import { ModalShell, inputCls, textareaCls, labelCls, btnGhost, btnPrimary } from '@/components/dashboard/shared/UiKit';
 
@@ -110,10 +110,18 @@ export default function AddProductModal({
   );
   const galleryCount = visibleExisting.length + form.galleryImages.length;
 
-  const profit = (Number(form.price) || 0) - (Number(form.manufactureCost) || 0);
+  // With materials set, stock = how many units the inventory can produce right now.
+  const hasMaterials = materials.some((m) => m.qty > 0);
+  const autoStock = hasMaterials ? producibleUnits(materials, inventory) : null;
+  const stockValue = autoStock ?? (Number(form.stock) || 0);
+  // Manufacture cost follows the material cost whenever materials are set (also when editing).
+  const autoCost = hasMaterials ? materialCost(materials, inventory) : null;
+  const costValue = autoCost ?? (Number(form.manufactureCost) || 0);
+
+  const profit = (Number(form.price) || 0) - costValue;
   const margin = form.price ? (profit / Number(form.price)) * 100 : 0;
 
-  const setNum = (key: 'stock' | 'price' | 'manufactureCost') => (e: ChangeEvent<HTMLInputElement>) => {
+  const setNum = (key: 'stock' | 'price' | 'manufactureCost' | 'imagecount') => (e: ChangeEvent<HTMLInputElement>) => {
     if (key === 'price') setFieldErrors((p) => ({ ...p, price: undefined }));
     setForm((p) => ({ ...p, [key]: Number(e.target.value) || 0 }));
   };
@@ -158,9 +166,9 @@ export default function AddProductModal({
       const result = await onSubmit?.({
         ...form,
         price: Number(form.price) || 0,
-        stock: Number(form.stock) || 0,
-        manufactureCost: Number(form.manufactureCost) || 0,
-        imagecount: galleryCount + 1,
+        stock: stockValue,
+        manufactureCost: costValue,
+        imagecount: Math.max(0, Math.floor(Number(form.imagecount) || 0)),
         personalization: false,
         personalizationEnabled: false,
         personalizationOptions: [],
@@ -230,14 +238,17 @@ export default function AddProductModal({
           </div>
           <MaterialsEditor value={materials} onChange={changeMaterials} inventory={inventory} />
           <div>
-            <label className={labelCls}>Manufacture Unit Cost (LKR)</label>
+            <label className={labelCls}>
+              Manufacture Unit Cost (LKR){autoCost !== null && <span className="ml-1 font-normal text-emerald-600">· auto from materials</span>}
+            </label>
             <input
               type="number"
               min={0}
               inputMode="decimal"
-              className={inputCls}
+              className={`${inputCls} ${autoCost !== null ? 'cursor-not-allowed bg-[#F1F5F9]' : ''}`}
               placeholder="0.00"
-              value={form.manufactureCost ? form.manufactureCost : ''}
+              readOnly={autoCost !== null}
+              value={autoCost !== null ? autoCost : form.manufactureCost ? form.manufactureCost : ''}
               onChange={setNum('manufactureCost')}
               onWheel={noWheel}
               onKeyDown={noArrows}
@@ -273,19 +284,38 @@ export default function AddProductModal({
             </div>
           </div>
           <div>
-            <label className={labelCls}>Stock (units)</label>
+            <label className={labelCls}>
+              Stock (units){autoStock !== null && <span className="ml-1 font-normal text-emerald-600">· auto from inventory</span>}
+            </label>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              inputMode="numeric"
+              className={`${inputCls} ${autoStock !== null ? 'cursor-not-allowed bg-[#F1F5F9]' : ''}`}
+              placeholder="0"
+              readOnly={autoStock !== null}
+              value={autoStock !== null ? autoStock : form.stock ? form.stock : ''}
+              onChange={setNum('stock')}
+              onWheel={noWheel}
+              onKeyDown={noArrows}
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <label className={labelCls}>Customer Image Count</label>
             <input
               type="number"
               min={0}
               step={1}
               inputMode="numeric"
               className={inputCls}
-              placeholder="0"
-              value={form.stock ? form.stock : ''}
-              onChange={setNum('stock')}
+              placeholder="e.g. 6"
+              value={form.imagecount ? form.imagecount : ''}
+              onChange={setNum('imagecount')}
               onWheel={noWheel}
               onKeyDown={noArrows}
             />
+            <p className="mt-1 text-xs text-[#94A3B8]">Number of photos the customer can upload for this product (0 = none).</p>
           </div>
         </div>
 
@@ -315,9 +345,9 @@ export default function AddProductModal({
                   type="button"
                   aria-label="Remove image"
                   onClick={() => setForm((p) => ({ ...p, primaryImage: null }))}
-                  className="absolute right-2 top-2 flex size-6 items-center justify-center rounded-full bg-white/90 shadow"
+                  className="absolute right-2 top-2 flex size-6 items-center justify-center rounded-full bg-white text-[#0F172A] shadow hover:bg-rose-50 hover:text-rose-600"
                 >
-                  <X size={12} />
+                  <X size={14} strokeWidth={2.5} />
                 </button>
                 <label className="absolute inset-x-0 bottom-0 cursor-pointer bg-black/50 py-1 text-center text-xs font-semibold text-white">
                   Replace image
@@ -380,9 +410,9 @@ function Thumb({ src, onRemove }: { src: string; onRemove: () => void }) {
         type="button"
         aria-label="Remove"
         onClick={onRemove}
-        className="absolute right-0.5 top-0.5 flex size-4 items-center justify-center rounded-full bg-white/90"
+        className="absolute right-0.5 top-0.5 flex size-4 items-center justify-center rounded-full bg-white text-[#0F172A] shadow hover:text-rose-600"
       >
-        <X size={10} />
+        <X size={10} strokeWidth={3} />
       </button>
     </div>
   );

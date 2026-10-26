@@ -20,7 +20,8 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import type { Delivery, DeliveryMethod, DeliveryStatus, DispatchOrder } from '@/types/delivery';
-import { DISPATCH_ORDERS, DRIVERS, TIME_SLOTS } from '@/data/deliveries';
+import { TIME_SLOTS } from '@/data/deliveries';
+import { fetchOrders } from '@/lib/orders';
 import { ModalShell, inputCls, textareaCls, labelCls, btnGhost, btnPrimary, lkr } from '@/components/dashboard/shared/UiKit';
 
 export type DeliveryModalMode = 'create' | 'edit' | 'view';
@@ -92,6 +93,7 @@ export default function DeliveryModal({
   const [addingZone, setAddingZone] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [dispatchOrders, setDispatchOrders] = useState<DispatchOrder[]>([]);
 
   const open = mode !== null;
   const readOnly = mode === 'view';
@@ -107,13 +109,40 @@ export default function DeliveryModal({
     setZoneDraft('');
   }, [open, delivery, nextSequence]);
 
+  useEffect(() => {
+    if (mode !== 'create') return;
+    let cancelled = false;
+    fetchOrders().then((list) => {
+      if (cancelled) return;
+      setDispatchOrders(
+        list
+          .filter((o) => o.status !== 'delivered' && o.status !== 'canceled')
+          .map((o): DispatchOrder => ({
+            orderId: o.orderId,
+            badge: o.status === 'pending' ? 'Pending Pack' : o.status === 'processing' ? 'Ready to Dispatch' : 'Standard',
+            total: Number(o.totalValue ?? 0),
+            customer: o.customerName,
+            phone: o.phone ?? '',
+            place: [o.city, o.district].filter(Boolean).join(', '),
+            address: o.shippingAddress ?? '',
+          }))
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
+
   const matches = useMemo(() => {
-    const q = orderQuery.trim().toLowerCase();
+    const q = orderQuery.trim().toLowerCase().replace(/^#/, '');
     if (!q) return [];
-    return DISPATCH_ORDERS.filter(
-      (o) => o.orderId.toLowerCase().includes(q) || o.customer.toLowerCase().includes(q)
+    return dispatchOrders.filter(
+      (o) =>
+        o.orderId.toLowerCase().replace(/^#/, '').includes(q) ||
+        o.customer.toLowerCase().includes(q) ||
+        o.phone.includes(q)
     );
-  }, [orderQuery]);
+  }, [orderQuery, dispatchOrders]);
 
   const set = <K extends keyof Delivery>(key: K, value: Delivery[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
@@ -354,17 +383,11 @@ export default function DeliveryModal({
               <label className={labelCls}>Assign Rider / Driver</label>
               <input
                 className={fieldCls}
-                list="driver-options"
                 value={form.driver}
                 disabled={dis}
                 onChange={(e) => set('driver', e.target.value)}
-                placeholder="Select or type a driver"
+                placeholder="Type driver name"
               />
-              <datalist id="driver-options">
-                {DRIVERS.map((d) => (
-                  <option key={d} value={d} />
-                ))}
-              </datalist>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -407,7 +430,13 @@ export default function DeliveryModal({
               <div>
                 <label className={labelCls}>{isCreate ? 'Tracking ID' : 'Dispatch Tracking ID'}</label>
                 <div className="relative">
-                  <input className={`${fieldCls} pr-8`} value={form.tracking} readOnly />
+                  <input
+                    className={`${fieldCls} pr-8`}
+                    value={form.tracking}
+                    readOnly={readOnly}
+                    onChange={(e) => set('tracking', e.target.value)}
+                    placeholder="Enter tracking ID"
+                  />
                   {!isCreate && !readOnly && (
                     <button
                       type="button"
@@ -524,7 +553,7 @@ export default function DeliveryModal({
                     setAddingZone(false);
                   }}
                   placeholder="Type zone, press Enter"
-                  className="h-8 w-44 rounded-lg border border-[#2563EB] bg-white px-2.5 text-xs focus:outline-none"
+                  className="h-8 w-44 rounded-lg border border-[#2563EB] bg-white px-2.5 text-xs font-medium text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none"
                 />
               ) : (
                 <button

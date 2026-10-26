@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Search,
   Download,
@@ -14,7 +14,8 @@ import {
   Undo2,
 } from 'lucide-react';
 import type { Delivery, DeliveryStatus } from '@/types/delivery';
-import { INITIAL_DELIVERIES, DRIVERS } from '@/data/deliveries';
+import { DRIVERS } from '@/data/deliveries';
+import { readDeliveries, writeDeliveries } from '@/lib/deliveryStore';
 import { useToastStore } from '@/store/toastStore';
 import { ConfirmModal, TableFooter, downloadCsv } from '@/components/dashboard/shared/UiKit';
 import DeliveryModal, { type DeliveryModalMode } from './DeliveryModal';
@@ -61,7 +62,19 @@ function Select({
 
 export default function DeliveriesView() {
   const { addToast } = useToastStore();
-  const [deliveries, setDeliveries] = useState<Delivery[]>(INITIAL_DELIVERIES);
+  const [deliveries, setDeliveries] = useState<Delivery[]>([]);
+
+  useEffect(() => {
+    setDeliveries(readDeliveries());
+  }, []);
+
+  // Every change is written straight to storage (never from an effect, so the
+  // initial empty state can't overwrite saved data).
+  const updateDeliveries = (fn: (prev: Delivery[]) => Delivery[]) => {
+    const next = fn(readDeliveries());
+    writeDeliveries(next);
+    setDeliveries(next);
+  };
   const [tab, setTab] = useState<'all' | DeliveryStatus>('all');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -94,7 +107,7 @@ export default function DeliveriesView() {
   const resetPage = () => setPage(1);
 
   const handleSave = (d: Delivery, isNew: boolean) => {
-    setDeliveries((prev) => (isNew ? [d, ...prev] : prev.map((x) => (x.id === d.id ? d : x))));
+    updateDeliveries((prev) => (isNew ? [d, ...prev] : prev.map((x) => (x.id === d.id ? d : x))));
     setModal(null);
     addToast(isNew ? `Delivery ${d.id} dispatched.` : `Delivery ${d.id} updated.`, 'success');
   };
@@ -107,7 +120,11 @@ export default function DeliveriesView() {
     ]);
   };
 
-  const nextSequence = 260913 + deliveries.length - INITIAL_DELIVERIES.length + 1;
+  const nextSequence =
+    deliveries.reduce((max, d) => {
+      const n = parseInt(d.id.replace(/\D/g, ''), 10);
+      return Number.isFinite(n) && n > max ? n : max;
+    }, 260913) + 1;
 
   return (
     <>
@@ -337,7 +354,7 @@ export default function DeliveriesView() {
         onCancel={() => setCancelTarget(null)}
         onConfirm={() => {
           if (cancelTarget) {
-            setDeliveries((prev) => prev.filter((x) => x.id !== cancelTarget.id));
+            updateDeliveries((prev) => prev.filter((x) => x.id !== cancelTarget.id));
             addToast(`Delivery ${cancelTarget.id} cancelled.`, 'success');
           }
           setCancelTarget(null);
