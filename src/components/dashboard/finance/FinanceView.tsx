@@ -4,7 +4,7 @@ import StatCard from '@/components/dashboard/shared/StatCard';
 import { useEffect, useMemo, useState } from 'react';
 import { Search, Plus, ArrowUp, ArrowDown, Wallet } from 'lucide-react';
 import type { Transaction, TxKind } from '@/types/finance';
-import { currentUsername, readTransactions, visibleTransactions, writeTransactions } from './financeStore';
+import { currentUsername, readTransactions, refreshTransactions, saveTransaction, visibleTransactions } from './financeStore';
 import { useToastStore } from '@/store/toastStore';
 import { lkr } from '@/components/dashboard/shared/UiKit';
 import FinanceModal, { type FinanceModalMode } from './FinanceModal';
@@ -16,10 +16,17 @@ export default function FinanceView() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
 
   useEffect(() => {
-    const load = () => setTransactions(visibleTransactions(readTransactions()));
+    let alive = true;
+    const load = () => {
+      setTransactions(visibleTransactions(readTransactions()));
+      refreshTransactions().then((list) => alive && setTransactions(visibleTransactions(list)));
+    };
     load();
     window.addEventListener('focus', load);
-    return () => window.removeEventListener('focus', load);
+    return () => {
+      alive = false;
+      window.removeEventListener('focus', load);
+    };
   }, []);
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState<TxKind>('income');
@@ -39,18 +46,15 @@ export default function FinanceView() {
     { label: 'Net Profit (LKR)', value: lkr(net), icon: Wallet, tone: 'bg-blue-50 text-[#2563EB]' },
   ];
 
-  const handleSave = (tx: Transaction, isNew: boolean) => {
-    const all = readTransactions();
-    const saved: Transaction = { ...tx, createdBy: isNew ? currentUsername() : tx.createdBy };
-    const next = isNew ? [saved, ...all] : all.map((t) => (t.id === saved.id ? saved : t));
+  const handleSave = async (tx: Transaction, isNew: boolean) => {
     try {
-      writeTransactions(next);
-    } catch {
-      addToast('Could not save the record.', 'error');
+      const saved = await saveTransaction({ ...tx, createdBy: isNew ? currentUsername() : tx.createdBy }, isNew);
+      setTransactions(visibleTransactions(readTransactions()));
+      setModal(null);
+      addToast(`${saved.kind === 'income' ? 'Income' : 'Expense'} ${isNew ? 'recorded' : 'updated'}.`, 'success');
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : 'Could not save the record.', 'error');
     }
-    setTransactions(visibleTransactions(next));
-    setModal(null);
-    addToast(`${tx.kind === 'income' ? 'Income' : 'Expense'} ${isNew ? 'recorded' : 'updated'}.`, 'success');
   };
 
   return (

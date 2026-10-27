@@ -9,10 +9,12 @@ import { DEFAULT_ROLE_NAME, PAGE_OPTIONS, type Role } from '@/lib/roles';
 interface Props {
   roles: Role[];
   memberCountByRole: Record<string, number>;
-  onChange: (roles: Role[], renamed?: { from: string; to: string }) => void;
+  /** Resolves true when the backend saved the role (editing = null creates a new role). */
+  onSave: (editing: Role | null, name: string, pages: string[]) => Promise<boolean>;
+  onDelete: (role: Role) => Promise<boolean>;
 }
 
-export default function RolesPanel({ roles, memberCountByRole, onChange }: Props) {
+export default function RolesPanel({ roles, memberCountByRole, onSave, onDelete }: Props) {
   const { addToast } = useToastStore();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Role | null>(null);
@@ -20,6 +22,7 @@ export default function RolesPanel({ roles, memberCountByRole, onChange }: Props
   const [pages, setPages] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [deleting, setDeleting] = useState<Role | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const openAdd = () => {
     setEditing(null);
@@ -39,23 +42,16 @@ export default function RolesPanel({ roles, memberCountByRole, onChange }: Props
   const toggle = (href: string) => setPages((p) => (p.includes(href) ? p.filter((x) => x !== href) : [...p, href]));
   const allSelected = pages.length === PAGE_OPTIONS.length;
 
-  const save = () => {
+  const save = async () => {
+    if (saving) return;
     const n = name.trim();
     if (!n) return setError('Role name is required.');
     if (roles.some((r) => r.name.toLowerCase() === n.toLowerCase() && r.id !== editing?.id)) return setError('A role with this name already exists.');
     if (!pages.length) return setError('Select at least one page.');
-    if (editing) {
-      onChange(
-        roles.map((r) => (r.id === editing.id ? { ...r, name: n, pages } : r)),
-        n !== editing.name ? { from: editing.name, to: n } : undefined
-      );
-      addToast('Role updated.', 'success');
-    } else {
-      const max = roles.reduce((m, r) => Math.max(m, Number(r.id.replace(/\D/g, '')) || 0), 0);
-      onChange([...roles, { id: `ROLE-${String(max + 1).padStart(3, '0')}`, name: n, pages }]);
-      addToast('Role created.', 'success');
-    }
-    setOpen(false);
+    setSaving(true);
+    const ok = await onSave(editing, n, pages);
+    setSaving(false);
+    if (ok) setOpen(false);
   };
 
   return (
@@ -115,7 +111,7 @@ export default function RolesPanel({ roles, memberCountByRole, onChange }: Props
         footer={
           <>
             <button type="button" onClick={() => setOpen(false)} className={btnGhost}>Cancel</button>
-            <button type="button" onClick={save} className={btnPrimary}>{editing ? 'Save Changes' : 'Create Role'}</button>
+            <button type="button" onClick={save} disabled={saving} className={btnPrimary}>{saving ? 'Saving...' : editing ? 'Save Changes' : 'Create Role'}</button>
           </>
         }
       >
@@ -154,10 +150,9 @@ export default function RolesPanel({ roles, memberCountByRole, onChange }: Props
         message={<>Role <b>{deleting?.name}</b> will be removed.</>}
         confirmLabel="Delete"
         onCancel={() => setDeleting(null)}
-        onConfirm={() => {
+        onConfirm={async () => {
           if (!deleting) return;
-          onChange(roles.filter((r) => r.id !== deleting.id));
-          addToast('Role deleted.', 'success');
+          await onDelete(deleting);
           setDeleting(null);
         }}
       />

@@ -1,7 +1,7 @@
 import { Eye, Pencil } from 'lucide-react';
 import type { Product } from '@/types/product';
-import { readInventory } from '@/lib/inventoryStore';
-import { readMaterials, materialCost } from '@/lib/materials';
+import { useInventory } from '@/lib/inventoryStore';
+import { readMaterials, materialCost, useMaterialsSync } from '@/lib/materials';
 
 interface ProductTableProps {
   products: Product[];
@@ -16,7 +16,8 @@ const money = (n: number) =>
 
 export default function ProductTable({ products, togglingId, onView, onEdit, onToggle }: ProductTableProps) {
   const rows = Array.isArray(products) ? products : [];
-  const inventory = rows.length ? readInventory() : [];
+  const inventory = useInventory();
+  useMaterialsSync();
 
   return (
     <div className="min-h-0 flex-1 overflow-auto">

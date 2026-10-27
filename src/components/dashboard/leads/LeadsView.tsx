@@ -2,10 +2,10 @@
 
 import StatCard from '@/components/dashboard/shared/StatCard';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Eye, PhoneCall, Pencil, Plus, Search, Trash2, Users, CalendarClock, ListChecks } from 'lucide-react';
+import { CheckCircle2, Eye, FileUp, PhoneCall, Pencil, Plus, Search, Trash2, Users, CalendarClock, ListChecks } from 'lucide-react';
 import type { DemoSession } from '@/lib/demoAuth';
 import { useToastStore } from '@/store/toastStore';
-import { ConfirmModal, TableFooter, btnPrimary, inputCls } from '@/components/dashboard/shared/UiKit';
+import { ConfirmModal, TableFooter, btnGhost, btnPrimary, inputCls } from '@/components/dashboard/shared/UiKit';
 import { Skeleton } from '@/components/dashboard/shared/Skeleton';
 import {
   DEFAULT_TARGET,
@@ -17,15 +17,19 @@ import {
   readLeads,
   readSession,
   readTargets,
+  refreshLeads,
+  refreshTargets,
+  saveTarget,
   subscribeCrm,
-  writeLeads,
-  writeTargets,
+  syncLeads,
   type CrmUser,
   LEAD_STATUSES,
   type Lead,
   type Target,
 } from '@/lib/crm';
+import { refreshTeam } from '@/lib/teamApi';
 import LeadProfileModal, { type ProfileSave } from './LeadProfileModal';
+import ImportLeadsModal from './ImportLeadsModal';
 import TeamPanel from './TeamPanel';
 
 const PAGE_SIZE = 8;
@@ -36,6 +40,13 @@ const STATUS_TONE: Record<string, string> = {
   'Follow Up': 'bg-amber-50 text-amber-600',
   Converted: 'bg-emerald-50 text-emerald-600',
 };
+
+const fmtDate = (iso: string) =>
+  new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+const fmtTime = (iso: string) =>
+  new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true });
+const toInput = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 const fmt = (iso: string) =>
   new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -53,10 +64,14 @@ export default function LeadsView() {
   const [status, setStatus] = useState('all');
   const [owner, setOwner] = useState('all');
   const [source, setSource] = useState('all');
+  const [dateRange, setDateRange] = useState<'all' | 'today' | 'week' | 'custom'>('all');
+  const [from, setFrom] = useState(toInput(new Date()));
+  const [to, setTo] = useState(toInput(new Date()));
   const [page, setPage] = useState(1);
 
   const [profile, setProfile] = useState<{ lead: Lead; isNew: boolean } | null>(null);
   const [deleting, setDeleting] = useState<Lead | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const isAdmin = session?.role === 'admin';
   const me = session?.username ?? '';
@@ -67,6 +82,12 @@ export default function LeadsView() {
     setTargets(readTargets());
     setUsers(readCrmUsers());
     setReady(true);
+    // Cached copy shown first; the backend copy replaces it as soon as it answers.
+    Promise.all([refreshLeads(), refreshTargets(), refreshTeam()]).then(([l, t]) => {
+      setLeads(l);
+      setTargets(t);
+      setUsers(readCrmUsers());
+    });
   }, []);
 
   useEffect(() => {
@@ -80,14 +101,38 @@ export default function LeadsView() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const now = new Date();
+    const sod = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    let start: Date | null = null;
+    let end: Date | null = null;
+    if (dateRange === 'today') {
+      start = sod;
+      end = new Date(sod.getTime() + 86400000 - 1);
+    } else if (dateRange === 'week') {
+      start = new Date(sod);
+      start.setDate(start.getDate() - ((start.getDay() + 6) % 7)); // Monday
+      end = new Date(sod.getTime() + 86400000 - 1);
+    } else if (dateRange === 'custom') {
+      start = from ? new Date(`${from}T00:00:00`) : null;
+      end = to ? new Date(`${to}T23:59:59.999`) : null;
+    }
+    const inDate = (iso: string) => {
+      if (!start && !end) return true;
+      const t = new Date(iso).getTime();
+      if (Number.isNaN(t)) return false;
+      return (!start || t >= start.getTime()) && (!end || t <= end.getTime());
+    };
     return visible.filter(
       (l) =>
+        inDate(l.dateAdded) &&
         (status === 'all' || l.status === status) &&
         (source === 'all' || l.source === source) &&
         (owner === 'all' || (owner === '' ? !l.owner : l.owner === owner)) &&
         (!q || [l.id, l.business, l.phone].some((v) => v.toLowerCase().includes(q)))
-    );
-  }, [visible, search, status, source, owner]);
+    )
+      // ML001, ML002, ML003 ... (ascending by lead number)
+      .sort((a, b) => (Number(a.id.replace(/\D/g, '')) || 0) - (Number(b.id.replace(/\D/g, '')) || 0));
+  }, [visible, search, status, source, owner, dateRange, from, to]);
 
   const safePage = Math.min(page, Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)));
   const rows = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
@@ -101,15 +146,18 @@ export default function LeadsView() {
     { label: 'Converted', value: visible.filter((l) => l.status === 'Converted').length, icon: CheckCircle2, tone: 'bg-emerald-50 text-emerald-600' },
   ];
 
-  /* ---------- mutations (always re-read first so other users' edits are not overwritten) ---------- */
-  const mutate = (fn: (all: Lead[]) => Lead[], msg?: string) => {
-    const next = fn(readLeads());
+  /* ---------- mutations (always re-read from the backend first so other users' edits are not overwritten) ---------- */
+  const mutate = async (fn: (all: Lead[]) => Lead[], msg?: string): Promise<boolean> => {
     try {
-      writeLeads(next);
-      setLeads(next);
+      const before = await refreshLeads();
+      const next = fn(before);
+      await syncLeads(before, next);
+      setLeads(await refreshLeads());
       if (msg) addToast(msg, 'success');
-    } catch {
-      addToast('Could not save changes.', 'error');
+      return true;
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : 'Could not save changes.', 'error');
+      return false;
     }
   };
 
@@ -137,10 +185,10 @@ export default function LeadsView() {
     });
   };
 
-  const saveProfile = ({ lead: v, converting }: ProfileSave) => {
+  const saveProfile = async ({ lead: v, converting }: ProfileSave) => {
     const isNew = profile?.isNew;
     const now = new Date().toISOString();
-    mutate((all) => {
+    const ok = await mutate((all) => {
       if (isNew) {
         const id = all.some((l) => l.id === v.id) ? nextLeadId(all) : v.id;
         let lead: Lead = { ...v, id, owner: isAdmin ? v.owner : me };
@@ -160,6 +208,7 @@ export default function LeadsView() {
         return next;
       });
     }, isNew ? 'Lead added.' : 'Lead saved.');
+    if (!ok) return;
     if (isNew) setPage(1);
     setProfile(null);
   };
@@ -178,23 +227,26 @@ export default function LeadsView() {
     };
   };
 
-  const reassign = (from: string, to: string) => {
+  const reassign = async (from: string, to: string) => {
     let moved = 0;
-    mutate((all) =>
+    const ok = await mutate((all) =>
       all.map((l) => {
         if (l.owner !== from || l.status === 'Converted') return l;
         moved += 1;
         return { ...l, owner: to, history: [...l.history, { n: 0, at: new Date().toISOString(), by: 'admin', callStatus: '', result: '', product: '', nextFollowUp: '', system: true, notes: `Reassigned from ${nameOf(from)} to ${nameOf(to)}.` }] };
       })
     );
-    addToast(`${moved} lead(s) reassigned.`, 'success');
+    if (ok) addToast(`${moved} lead(s) reassigned.`, 'success');
   };
 
-  const setTarget = (u: string, t: Target) => {
-    const next = { ...readTargets(), [u]: t };
-    writeTargets(next);
-    setTargets(next);
-    addToast('Targets saved.', 'success');
+  const setTarget = async (u: string, t: Target) => {
+    try {
+      await saveTarget(u, t);
+      setTargets((prev) => ({ ...prev, [u]: t }));
+      addToast('Targets saved.', 'success');
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : 'Could not save targets.', 'error');
+    }
   };
 
   const myMetrics = metricsFor(leads, me);
@@ -268,6 +320,19 @@ export default function LeadsView() {
               <option value="all">All Sources</option>
               {SOURCES.map((s) => <option key={s}>{s}</option>)}
             </select>
+            <select value={dateRange} onChange={(e) => { setDateRange(e.target.value as typeof dateRange); setPage(1); }} className={`${inputCls} lg:w-36`}>
+              <option value="all">All Dates</option>
+              <option value="today">Today</option>
+              <option value="week">This Week</option>
+              <option value="custom">Custom Range</option>
+            </select>
+            {dateRange === 'custom' && (
+              <div className="flex items-center gap-1.5">
+                <input type="date" value={from} max={to || undefined} onChange={(e) => { setFrom(e.target.value); setPage(1); }} className={`${inputCls} lg:w-36`} />
+                <span className="text-xs text-[#94A3B8]">to</span>
+                <input type="date" value={to} min={from || undefined} onChange={(e) => { setTo(e.target.value); setPage(1); }} className={`${inputCls} lg:w-36`} />
+              </div>
+            )}
             {isAdmin && (
               <select value={owner} onChange={(e) => { setOwner(e.target.value); setPage(1); }} className={`${inputCls} lg:w-40`}>
                 <option value="all">All Users</option>
@@ -275,30 +340,31 @@ export default function LeadsView() {
                 {users.map((u) => <option key={u.username} value={u.username}>{u.name}</option>)}
               </select>
             )}
-            {(
-              <button type="button" onClick={openNew} className={btnPrimary}><Plus size={14} /> Add Lead</button>
-            )}
+            <button type="button" onClick={() => setImportOpen(true)} className={btnGhost}><FileUp size={14} /> Import CSV</button>
+            <button type="button" onClick={openNew} className={btnPrimary}><Plus size={14} /> Add Lead</button>
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[960px] border-collapse text-left">
+            <table className="w-full min-w-[1040px] border-collapse text-left">
               <thead>
                 <tr className="bg-[#F8FAFC]">
-                  {['Lead ID', 'Customer', 'Source', 'Status', 'Call / Result', 'Next follow-up', ...(isAdmin ? ['Owner'] : []), 'Actions'].map((h) => (
+                  {['#', 'Lead ID', 'Customer', 'Date Added', 'Source', 'Status', 'Call / Result', 'Next follow-up', ...(isAdmin ? ['Owner'] : []), 'Actions'].map((h) => (
                     <th key={h} className="px-4 py-3 text-xs font-bold uppercase tracking-wider text-[#64748B]">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#F1F5F9]">
                 {rows.length === 0 ? (
-                  <tr><td colSpan={8} className="py-14 text-center text-xs text-[#94A3B8]">{isAdmin ? 'No leads match. Click "Add Lead" to create one.' : 'No leads yet. Click "Add Lead" to create one.'}</td></tr>
+                  <tr><td colSpan={10} className="py-14 text-center text-xs text-[#94A3B8]">{filtered.length === 0 && visible.length > 0 ? 'No leads match the selected filters.' : isAdmin ? 'No leads match. Click "Add Lead" to create one.' : 'No leads yet. Click "Add Lead" to create one.'}</td></tr>
                 ) : (
-                  rows.map((l) => {
+                  rows.map((l, idx) => {
                     const overdue = l.status !== 'Converted' && l.nextFollowUp && new Date(l.nextFollowUp) < new Date();
                     return (
                       <tr key={l.id} className="hover:bg-[#F8FAFC]/80">
+                        <td className="px-4 py-3 text-xs font-semibold text-[#64748B]">{(safePage - 1) * PAGE_SIZE + idx + 1}</td>
                         <td className="px-4 py-3"><span className="rounded-md bg-[#EFF6FF] px-2 py-1 text-xs font-bold text-[#2563EB]">{l.id}</span></td>
                         <td className="px-4 py-3"><p className="text-xs font-bold text-[#0F172A]">{l.business}</p><p className="text-xs text-[#94A3B8]">{l.phone}</p></td>
+                        <td className="whitespace-nowrap px-4 py-3"><p className="text-xs font-semibold text-[#0F172A]">{l.dateAdded ? fmtDate(l.dateAdded) : '-'}</p><p className="text-xs text-[#94A3B8]">{l.dateAdded ? fmtTime(l.dateAdded) : ''}</p></td>
                         <td className="px-4 py-3 text-xs text-[#475569]">{l.source}</td>
                         <td className="px-4 py-3"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${STATUS_TONE[l.status]}`}>{l.status}</span></td>
                         <td className="px-4 py-3"><p className="text-xs font-semibold text-[#0F172A]">{l.callStatus}</p><p className="text-xs text-[#94A3B8]">{l.result || '-'}</p></td>
@@ -335,13 +401,31 @@ export default function LeadsView() {
         onSave={saveProfile}
         onDelete={(l) => { setProfile(null); setDeleting(l); }}
       />
+      <ImportLeadsModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        isAdmin={isAdmin}
+        me={me}
+        users={users}
+        onDone={async (r) => {
+          if ('error' in r) {
+            addToast(r.error, 'error');
+            setLeads(await refreshLeads());
+            return;
+          }
+          setLeads(await refreshLeads());
+          setPage(1);
+          addToast(`${r.created} lead(s) imported${r.skipped ? `, ${r.skipped} skipped` : ''}.`, 'success');
+        }}
+      />
+
       <ConfirmModal
         open={!!deleting}
         title="Delete lead?"
         message={<>Lead <b>{deleting?.id}</b> ({deleting?.business}) and its follow-up history will be removed.</>}
         confirmLabel="Delete"
         onCancel={() => setDeleting(null)}
-        onConfirm={() => { if (deleting) mutate((all) => all.filter((l) => l.id !== deleting.id), 'Lead deleted.'); setDeleting(null); }}
+        onConfirm={async () => { if (deleting) await mutate((all) => all.filter((l) => l.id !== deleting.id), 'Lead deleted.'); setDeleting(null); }}
       />
     </div>
   );

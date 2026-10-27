@@ -3,16 +3,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Copy, Eye, EyeOff, KeyRound, Pencil, Plus, Search, ShieldCheck, Trash2, UserCheck, UserPlus, UserX, Users, Wand2 } from 'lucide-react';
 import { useToastStore } from '@/store/toastStore';
-import {
-  DEMO_ADMIN,
-  INITIAL_DEMO_TEAMS,
-  readDemoTeams,
-  saveDemoTeams,
-  type DemoMember,
-  type DemoTeam,
-} from '@/lib/demoAuth';
+import { DEMO_SESSION_KEY, type DemoMember, type DemoSession } from '@/lib/demoAuth';
 import RolesPanel from './RolesPanel';
-import { DEFAULT_ROLE_NAME, readRoles, saveRoles, type Role } from '@/lib/roles';
+import { DEFAULT_ROLE_NAME, readRoles, type Role } from '@/lib/roles';
+import {
+  createMember,
+  createRole,
+  deleteMember,
+  deleteRole,
+  readCachedMembers,
+  refreshTeam,
+  resetMemberPassword,
+  setMemberStatus,
+  updateMember,
+  updateRole,
+} from '@/lib/teamApi';
 import {
   ConfirmModal,
   ModalShell,
@@ -23,16 +28,7 @@ import {
   labelCls,
 } from '@/components/dashboard/shared/UiKit';
 
-const TEAM_ID = 'TEAM-002';
-const TEAM_NAME = 'Business Operator';
 const PAGE_SIZE = 8;
-
-/* Keep exactly one team (Business Operator). Members of any old team are moved into it. */
-function normalize(teams: DemoTeam[]): DemoTeam[] {
-  const members = teams.flatMap((t) => t.members).map((m) => ({ ...m, role: m.role && m.role !== 'Staff' ? m.role : DEFAULT_ROLE_NAME }));
-  const base = teams.find((t) => t.id === TEAM_ID) ?? INITIAL_DEMO_TEAMS.find((t) => t.id === TEAM_ID)!;
-  return [{ ...base, id: TEAM_ID, name: TEAM_NAME, members }];
-}
 
 const initials = (n: string) => n.split(' ').filter(Boolean).map((p) => p[0]).join('').slice(0, 2).toUpperCase();
 /* ID prefix comes from the role: "Business Operator" -> BO, "Sales Executive" -> SE, "Sales" -> SA */
@@ -81,36 +77,68 @@ export default function OperatorsView() {
   const [resetting, setResetting] = useState<DemoMember | null>(null);
   const [resetPw, setResetPw] = useState('');
   const [deleting, setDeleting] = useState<DemoMember | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [adminEmail, setAdminEmail] = useState('');
 
   useEffect(() => {
     try {
-      const teams = normalize(readDemoTeams());
-      setMembers(teams[0].members);
-      setRoles(readRoles());
-    } catch (e) {
-      addToast(e instanceof Error ? e.message : 'Could not load users.', 'error');
-    } finally {
-      setLoaded(true);
-    }
+      const raw = localStorage.getItem(DEMO_SESSION_KEY);
+      const s = raw ? (JSON.parse(raw) as DemoSession) : null;
+      if (s?.role === 'admin') setAdminEmail(s.email ?? '');
+    } catch {}
+  }, []);
+
+  /** Pulls members and roles from the backend (also refreshes the local cache). */
+  const reload = async () => {
+    const t = await refreshTeam();
+    setMembers(t.members);
+    setRoles(t.roles);
+    return t;
+  };
+
+  useEffect(() => {
+    let alive = true;
+    // Cached copy first so the page is not empty while the backend answers.
+    setMembers(readCachedMembers());
+    setRoles(readRoles());
+    refreshTeam()
+      .then((t) => {
+        if (!alive) return;
+        setMembers(t.members);
+        setRoles(t.roles);
+        if (!t.online) addToast('Server is not reachable. Showing the last saved users.', 'error');
+      })
+      .finally(() => alive && setLoaded(true));
+    return () => {
+      alive = false;
+    };
   }, [addToast]);
 
-  const persist = (next: DemoMember[]) => {
-    setMembers(next);
+  const fail = (e: unknown, fallback: string) => addToast(e instanceof Error ? e.message : fallback, 'error');
+
+  const saveRole = async (editingRole: Role | null, name: string, pages: string[]) => {
     try {
-      saveDemoTeams([{ id: TEAM_ID, name: TEAM_NAME, members: next }]);
-    } catch {
-      addToast('Could not save changes.', 'error');
+      if (editingRole) await updateRole(editingRole.id, { name, pages });
+      else await createRole(name, pages);
+      await reload();
+      addToast(editingRole ? 'Role updated.' : 'Role created.', 'success');
+      return true;
+    } catch (e) {
+      fail(e, 'Could not save role.');
+      return false;
     }
   };
 
-  const changeRoles = (next: Role[], renamed?: { from: string; to: string }) => {
-    setRoles(next);
+  const removeRole = async (role: Role) => {
     try {
-      saveRoles(next);
-    } catch {
-      addToast('Could not save roles.', 'error');
+      await deleteRole(role.id);
+      await reload();
+      addToast('Role deleted.', 'success');
+      return true;
+    } catch (e) {
+      fail(e, 'Could not delete role.');
+      return false;
     }
-    if (renamed) persist(members.map((m) => (m.role === renamed.from ? { ...m, role: renamed.to } : m)));
   };
   const memberCountByRole = useMemo(
     () => members.reduce<Record<string, number>>((acc, m) => ({ ...acc, [m.role]: (acc[m.role] ?? 0) + 1 }), {}),
@@ -141,7 +169,10 @@ export default function OperatorsView() {
 
   const openAdd = () => {
     setEditing(null);
-    setForm(EMPTY);
+    // The dropdown must start on a role that really exists, otherwise it shows the first
+    // option while the form still holds the default role (wrong ID prefix).
+    const startRole = roles.some((r) => r.name === DEFAULT_ROLE_NAME) ? DEFAULT_ROLE_NAME : roles[0]?.name ?? DEFAULT_ROLE_NAME;
+    setForm({ ...EMPTY, role: startRole });
     setErrors({});
     setShowPw(false);
     setUsernameTouched(false);
@@ -166,15 +197,16 @@ export default function OperatorsView() {
     if (k === 'username') setUsernameTouched(true);
   };
 
-  const submit = () => {
+  const submit = async () => {
+    if (busy) return;
     const e: Partial<Record<keyof Form, string>> = {};
-    const u = form.username.trim().toLowerCase();
+    // Login username is the Member ID (new users). Existing users keep the username they already have.
+    const newId = nextId(form.role);
+    const u = editing ? editing.username : newId;
     if (!form.name.trim()) e.name = 'Full name is required.';
     if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) e.email = 'Enter a valid email address.';
     if (!form.phone.trim()) e.phone = 'Phone number is required.';
-    if (!/^[a-z0-9._-]{3,}$/.test(u)) e.username = 'At least 3 letters/numbers (a-z, 0-9, . _ -).';
-    else if (u === DEMO_ADMIN.username || members.some((m) => m.username.toLowerCase() === u && m.id !== editing?.id))
-      e.username = 'This username is already taken.';
+    else if (!/^\d{10}$/.test(form.phone.trim())) e.phone = 'Phone number must be exactly 10 digits (e.g. 0771234567).';
     if (!editing || form.password) {
       if (form.password.length < 6) e.password = 'At least 6 characters.';
       if (form.confirm !== form.password) e.confirm = 'Passwords do not match.';
@@ -183,50 +215,59 @@ export default function OperatorsView() {
       e.email = 'This email is already used.';
     if (Object.keys(e).length) return setErrors(e);
 
-    if (editing) {
-      persist(
-        members.map((m) =>
-          m.id === editing.id
-            ? { ...m, role: form.role, name: form.name.trim(), email: form.email.trim(), phone: form.phone.trim(), username: u, password: form.password || m.password }
-            : m
-        )
-      );
-      addToast('User updated.', 'success');
+    setBusy(true);
+    try {
+      if (editing) {
+        await updateMember(editing.id, { name: form.name.trim(), email: form.email.trim(), phone: form.phone.trim() });
+        if (form.password) await resetMemberPassword(editing.id, form.password);
+        await reload();
+        addToast('User updated.', 'success');
+        setFormOpen(false);
+        if (form.password) setCreds({ name: form.name.trim(), username: u, password: form.password });
+        return;
+      }
+      // The backend generates the Member ID (and uses it as the username).
+      const created = await createMember({
+        name: form.name.trim(),
+        email: form.email.trim(),
+        phone: form.phone.trim(),
+        role: form.role,
+        password: form.password,
+      });
+      await reload();
       setFormOpen(false);
-      if (form.password) setCreds({ name: form.name.trim(), username: u, password: form.password });
-      return;
+      setPage(1);
+      setCreds({ name: created.name, username: created.username, password: form.password });
+      addToast(`${created.id} created.`, 'success');
+    } catch (err2) {
+      fail(err2, 'Could not save user.');
+    } finally {
+      setBusy(false);
     }
-    const member: DemoMember = {
-      id: nextId(form.role),
-      name: form.name.trim(),
-      email: form.email.trim(),
-      phone: form.phone.trim(),
-      joinDate: new Date().toISOString().slice(0, 10),
-      role: form.role,
-      status: 'Active',
-      username: u,
-      password: form.password,
-    };
-    persist([member, ...members]);
-    setFormOpen(false);
-    setPage(1);
-    setCreds({ name: member.name, username: u, password: member.password });
-    addToast(`${member.id} created.`, 'success');
   };
 
-  const toggle = (m: DemoMember) => {
+  const toggle = async (m: DemoMember) => {
     const next = m.status === 'Active' ? 'Inactive' : 'Active';
-    persist(members.map((x) => (x.id === m.id ? { ...x, status: next } : x)));
-    addToast(`${m.name} is now ${next.toLowerCase()}.`, 'info');
+    try {
+      await setMemberStatus(m.id, next);
+      await reload();
+      addToast(`${m.name} is now ${next.toLowerCase()}.`, 'info');
+    } catch (e) {
+      fail(e, 'Could not change status.');
+    }
   };
 
-  const doReset = () => {
+  const doReset = async () => {
     if (!resetting) return;
     if (resetPw.length < 6) return addToast('Password must be at least 6 characters.', 'error');
-    persist(members.map((x) => (x.id === resetting.id ? { ...x, password: resetPw } : x)));
-    setCreds({ name: resetting.name, username: resetting.username, password: resetPw });
-    setResetting(null);
-    setResetPw('');
+    try {
+      await resetMemberPassword(resetting.id, resetPw);
+      setCreds({ name: resetting.name, username: resetting.username, password: resetPw });
+      setResetting(null);
+      setResetPw('');
+    } catch (e) {
+      fail(e, 'Could not reset password.');
+    }
   };
 
   const copy = async (text: string) => {
@@ -251,7 +292,7 @@ export default function OperatorsView() {
     <div className="compact-ui relative mx-auto flex w-full max-w-7xl flex-col px-3 pb-6 pt-2 sm:px-6 sm:pt-3 lg:px-8 lg:pt-4">
       <div className="mb-4">
         <h1 className="text-xl font-bold text-[#0F172A]">User Management</h1>
-        <p className="text-xs text-[#64748B]">One administrator and your users. Users sign in with the username and password you create, and see only the pages their role allows.</p>
+        <p className="text-xs text-[#64748B]">One administrator and your users. Users sign in with their Member ID and the password you set, and see only the pages their role allows.</p>
       </div>
 
       {/* Admin (only one) */}
@@ -261,7 +302,7 @@ export default function OperatorsView() {
         </span>
         <div className="flex-1">
           <p className="text-xs font-bold text-[#0F172A]">Administrator</p>
-          <p className="text-xs text-[#64748B]">Username: <span className="font-semibold text-[#0F172A]">{DEMO_ADMIN.username}</span> · Only one admin account</p>
+          <p className="text-xs text-[#64748B]">Email: <span className="font-semibold text-[#0F172A]">{adminEmail || 'admin'}</span> · Only one admin account</p>
         </div>
         <span className="w-fit rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-600">Full access - all pages</span>
       </div>
@@ -284,7 +325,7 @@ export default function OperatorsView() {
         ))}
       </div>
 
-      {tab === 'roles' && <RolesPanel roles={roles} memberCountByRole={memberCountByRole} onChange={changeRoles} />}
+      {tab === 'roles' && <RolesPanel roles={roles} memberCountByRole={memberCountByRole} onSave={saveRole} onDelete={removeRole} />}
 
       <section className={`overflow-hidden rounded-xl border border-[#E2E8F0] bg-white ${tab === 'roles' ? 'hidden' : ''}`}>
         <div className="flex flex-col gap-2 border-b border-[#E2E8F0] p-3 sm:flex-row sm:items-center">
@@ -377,12 +418,12 @@ export default function OperatorsView() {
         onClose={() => setFormOpen(false)}
         icon={<UserPlus size={18} />}
         title={editing ? 'Edit User' : 'Add User'}
-        subtitle={editing ? `${editing.id} - to change the password, use Reset password in the list.` : 'Create a user and give them a username and password.'}
+        subtitle={editing ? `${editing.id} - to change the password, use Reset password in the list.` : 'Create a user. Their Member ID is the login username; you set the password.'}
         maxWidth="max-w-md"
         footer={
           <>
             <button type="button" onClick={() => setFormOpen(false)} className={btnGhost}>Cancel</button>
-            <button type="button" onClick={submit} className={btnPrimary}>{editing ? 'Save Changes' : 'Create User'}</button>
+            <button type="button" onClick={submit} disabled={busy} className={btnPrimary}>{busy ? 'Saving...' : editing ? 'Save Changes' : 'Create User'}</button>
           </>
         }
       >
@@ -399,21 +440,24 @@ export default function OperatorsView() {
           </div>
           <div>
             <label className={labelCls}>Phone number</label>
-            <input className={`${inputCls} ${bd(errors.phone)}`} value={form.phone} placeholder="000-000-0000" onChange={(e) => set('phone', e.target.value)} />
+            <input className={`${inputCls} ${bd(errors.phone)}`} value={form.phone} inputMode="numeric" maxLength={10} placeholder="0771234567" onChange={(e) => set('phone', e.target.value.replace(/\D/g, '').slice(0, 10))} />
             {err(errors.phone)}
+            <p className={`mt-1 text-xs ${form.phone && form.phone.length !== 10 ? 'text-rose-600' : 'text-[#94A3B8]'}`}>{form.phone.length}/10 digits</p>
           </div>
           <div>
             <label className={labelCls}>Role</label>
-            <select className={inputCls} value={form.role} onChange={(e) => set('role', e.target.value)}>
+            <select className={inputCls} value={form.role} disabled={!!editing} onChange={(e) => set('role', e.target.value)}>
               {roles.map((r) => (
                 <option key={r.id} value={r.name}>{r.name}</option>
               ))}
+              {editing && !roles.some((r) => r.name === form.role) && <option value={form.role}>{form.role}</option>}
             </select>
+            {editing && <p className="mt-1 text-xs text-[#94A3B8]">Role can't be changed after the user is created (it decides the Member ID).</p>}
           </div>
           <div>
             <label className={labelCls}>Username (for login)</label>
-            <input className={`${inputCls} ${bd(errors.username)}`} value={form.username} placeholder="e.g. kavin" autoComplete="off" onChange={(e) => set('username', e.target.value.toLowerCase())} />
-            {err(errors.username)}
+            <input className={inputCls} value={editing ? editing.username : nextId(form.role)} readOnly />
+            {!editing && <p className="mt-1 text-xs text-[#94A3B8]">Auto-filled from the Member ID. Changes when you change the role.</p>}
           </div>
           {!editing && (
             <>
@@ -441,7 +485,7 @@ export default function OperatorsView() {
           )}
           {!editing && (
             <p className="rounded-lg bg-[#EFF6FF] px-3 py-2.5 text-xs leading-5 text-[#1D4ED8]">
-              Member ID is generated automatically, based on the role, next one is <b>{nextId(form.role)}</b>.
+              Member ID is generated automatically from the role (next one is <b>{nextId(form.role)}</b>). This ID is also the user&apos;s login username, so you only need to set the password.
             </p>
           )}
         </div>
@@ -506,10 +550,15 @@ export default function OperatorsView() {
         message={<>This permanently removes <b>{deleting?.name}</b> and their login. This cannot be undone.</>}
         confirmLabel="Delete"
         onCancel={() => setDeleting(null)}
-        onConfirm={() => {
+        onConfirm={async () => {
           if (!deleting) return;
-          persist(members.filter((m) => m.id !== deleting.id));
-          addToast('User deleted.', 'success');
+          try {
+            await deleteMember(deleting.id);
+            await reload();
+            addToast('User deleted.', 'success');
+          } catch (e) {
+            fail(e, 'Could not delete user.');
+          }
           setDeleting(null);
         }}
       />

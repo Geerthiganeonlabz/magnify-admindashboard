@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Search, Download, Plus, Eye, SquarePen, ChevronDown, Boxes, TriangleAlert, CircleX } from 'lucide-react';
+import { Search, Download, Plus, Eye, SquarePen, ChevronDown, Trash2, Boxes, TriangleAlert, CircleX } from 'lucide-react';
 import { type InventoryItem, type InventoryStatus, getInventoryStatus } from '@/types/inventory';
-import { readInventory, writeInventory } from '@/lib/inventoryStore';
+import { readInventory, refreshInventory, saveInventoryItem, deleteInventoryItem } from '@/lib/inventoryStore';
 import { useToastStore } from '@/store/toastStore';
-import { TableFooter, downloadCsv, lkr } from '@/components/dashboard/shared/UiKit';
+import { ConfirmModal, TableFooter, downloadCsv, lkr } from '@/components/dashboard/shared/UiKit';
 import StatCard from '@/components/dashboard/shared/StatCard';
 import InventoryModal, { type InventoryModalMode } from './InventoryModal';
 
@@ -20,17 +20,30 @@ const STATUS_META: Record<InventoryStatus, { label: string; badge: string; num: 
 export default function InventoryView() {
   const { addToast } = useToastStore();
   const [items, setItems] = useState<InventoryItem[]>([]);
-  useEffect(() => { setItems(readInventory()); }, []);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let alive = true;
+    setItems(readInventory());
+    refreshInventory().then((list) => {
+      if (!alive) return;
+      setItems(list);
+      setLoading(false);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<'all' | InventoryStatus>('all');
   const [page, setPage] = useState(1);
+  const [deleting, setDeleting] = useState<InventoryItem | null>(null);
   const [modal, setModal] = useState<{ mode: InventoryModalMode; item: InventoryItem | null } | null>(null);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter((i) => {
       if (status !== 'all' && getInventoryStatus(i.stock) !== status) return false;
-      return !q || [i.id, i.name, i.description].some((v) => v.toLowerCase().includes(q));
+      return !q || [i.id, i.name].some((v) => v.toLowerCase().includes(q));
     });
   }, [items, search, status]);
 
@@ -40,7 +53,12 @@ export default function InventoryView() {
 
   const lowCount = items.filter((i) => getInventoryStatus(i.stock) === 'low-stock').length;
   const outCount = items.filter((i) => getInventoryStatus(i.stock) === 'out-of-stock').length;
-  const nextId = `ITEM-${String(items.length + 1).padStart(4, '0')}`;
+  const nextId = `ITEM-${String(
+    items.reduce((max, i) => {
+      const n = parseInt(i.id.replace(/\D/g, ''), 10);
+      return Number.isFinite(n) && n > max ? n : max;
+    }, 0) + 1
+  ).padStart(4, '0')}`;
 
   const stats = [
     { label: 'Total Items', value: items.length, icon: Boxes, tone: 'bg-blue-50 text-[#2563EB]' },
@@ -48,12 +66,28 @@ export default function InventoryView() {
     { label: 'Out of Stock', value: outCount, icon: CircleX, tone: 'bg-rose-50 text-rose-500' },
   ];
 
-  const handleSave = (item: InventoryItem, isNew: boolean) => {
-    const next = isNew ? [item, ...items] : items.map((x) => (x.id === item.id ? item : x));
-    setItems(next);
-    writeInventory(next);
-    setModal(null);
-    addToast(isNew ? `${item.id} added to inventory.` : `${item.id} updated.`, 'success');
+  const handleSave = async (item: InventoryItem, isNew: boolean) => {
+    try {
+      const saved = await saveInventoryItem(item, isNew);
+      setItems((prev) => (isNew ? [saved, ...prev.filter((x) => x.id !== saved.id)] : prev.map((x) => (x.id === saved.id ? saved : x))));
+      setModal(null);
+      addToast(isNew ? `${saved.id} added to inventory.` : `${saved.id} updated.`, 'success');
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : 'Could not save inventory item.', 'error');
+    }
+  };
+
+  const handleDelete = async () => {
+    const target = deleting;
+    if (!target) return;
+    try {
+      await deleteInventoryItem(target.id);
+      setItems((prev) => prev.filter((x) => x.id !== target.id));
+      addToast(`${target.id} deleted.`, 'success');
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : 'Could not delete inventory item.', 'error');
+    }
+    setDeleting(null);
   };
 
   const handleExport = () => {
@@ -148,7 +182,7 @@ export default function InventoryView() {
               {rows.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-16 text-center text-xs text-[#94A3B8]">
-                    No items found.
+                    {loading ? 'Loading inventory...' : 'No items found.'}
                   </td>
                 </tr>
               ) : (
@@ -160,7 +194,6 @@ export default function InventoryView() {
                       <td className="px-5 py-3.5 text-xs font-medium text-[#64748B]">{i.id}</td>
                       <td className="px-5 py-3.5">
                         <p className="text-xs font-bold text-[#0F172A]">{i.name}</p>
-                        {i.description && <p className="text-xs text-[#94A3B8]">{i.description}</p>}
                       </td>
                       <td className={`px-5 py-3.5 text-center text-xs font-bold ${meta.num}`}>{i.stock}</td>
                       <td className="px-5 py-3.5 text-center">
@@ -191,6 +224,15 @@ export default function InventoryView() {
                           >
                             <SquarePen size={15} />
                           </button>
+                          <button
+                            type="button"
+                            aria-label={`Delete ${i.name}`}
+                            title="Delete"
+                            onClick={() => setDeleting(i)}
+                            className="flex size-8 items-center justify-center rounded-lg text-[#64748B] hover:bg-rose-50 hover:text-rose-600"
+                          >
+                            <Trash2 size={15} />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -203,6 +245,14 @@ export default function InventoryView() {
         <TableFooter page={safePage} pageSize={PAGE_SIZE} total={filtered.length} noun="items" onPage={setPage} />
       </div>
 
+      <ConfirmModal
+        open={!!deleting}
+        title="Delete inventory item?"
+        message={<><b>{deleting?.name}</b> ({deleting?.id}) and its stock log will be permanently removed. Products that use this item as a material will lose it from their cost and stock.</>}
+        confirmLabel="Delete"
+        onCancel={() => setDeleting(null)}
+        onConfirm={handleDelete}
+      />
       <InventoryModal
         mode={modal?.mode ?? null}
         item={modal?.item ?? null}

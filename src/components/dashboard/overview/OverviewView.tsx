@@ -7,7 +7,7 @@ import type { Order } from '@/types/order';
 import { loadReportData, type ReportData } from '@/components/dashboard/reports/reportBuilders';
 import { readTransactions, visibleTransactions } from '@/components/dashboard/finance/financeStore';
 import { readDeliveries } from '@/lib/deliveryStore';
-import { readInventory } from '@/lib/inventoryStore';
+import { readInventory, refreshInventory } from '@/lib/inventoryStore';
 import StatCard from '@/components/dashboard/shared/StatCard';
 import { getInventoryStatus } from '@/types/inventory';
 import { OverviewSkeleton } from '@/components/dashboard/shared/Skeleton';
@@ -44,7 +44,7 @@ export default function OverviewView() {
 
   useEffect(() => {
     let alive = true;
-    loadReportData().then((d) => alive && setData(d));
+    Promise.all([loadReportData(), refreshInventory()]).then(([d]) => alive && setData(d));
     return () => {
       alive = false;
     };

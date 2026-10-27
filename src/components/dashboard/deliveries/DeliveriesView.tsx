@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import type { Delivery, DeliveryStatus } from '@/types/delivery';
 import { DRIVERS } from '@/data/deliveries';
-import { readDeliveries, writeDeliveries } from '@/lib/deliveryStore';
+import { readDeliveries, refreshDeliveries, saveDelivery, deleteDelivery } from '@/lib/deliveryStore';
 import { useToastStore } from '@/store/toastStore';
 import { ConfirmModal, TableFooter, downloadCsv } from '@/components/dashboard/shared/UiKit';
 import DeliveryModal, { type DeliveryModalMode } from './DeliveryModal';
@@ -65,16 +65,13 @@ export default function DeliveriesView() {
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
 
   useEffect(() => {
+    let alive = true;
     setDeliveries(readDeliveries());
+    refreshDeliveries().then((list) => alive && setDeliveries(list));
+    return () => {
+      alive = false;
+    };
   }, []);
-
-  // Every change is written straight to storage (never from an effect, so the
-  // initial empty state can't overwrite saved data).
-  const updateDeliveries = (fn: (prev: Delivery[]) => Delivery[]) => {
-    const next = fn(readDeliveries());
-    writeDeliveries(next);
-    setDeliveries(next);
-  };
   const [tab, setTab] = useState<'all' | DeliveryStatus>('all');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -84,6 +81,8 @@ export default function DeliveriesView() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [modal, setModal] = useState<{ mode: DeliveryModalMode; delivery: Delivery | null } | null>(null);
   const [cancelTarget, setCancelTarget] = useState<Delivery | null>(null);
+  const [bulkDelete, setBulkDelete] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -106,10 +105,15 @@ export default function DeliveriesView() {
 
   const resetPage = () => setPage(1);
 
-  const handleSave = (d: Delivery, isNew: boolean) => {
-    updateDeliveries((prev) => (isNew ? [d, ...prev] : prev.map((x) => (x.id === d.id ? d : x))));
-    setModal(null);
-    addToast(isNew ? `Delivery ${d.id} dispatched.` : `Delivery ${d.id} updated.`, 'success');
+  const handleSave = async (d: Delivery, isNew: boolean) => {
+    try {
+      const saved = await saveDelivery(d, isNew);
+      setDeliveries((prev) => (isNew ? [saved, ...prev.filter((x) => x.id !== saved.id)] : prev.map((x) => (x.id === saved.id ? saved : x))));
+      setModal(null);
+      addToast(isNew ? `Delivery ${saved.id} dispatched.` : `Delivery ${saved.id} updated.`, 'success');
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : 'Could not save delivery.', 'error');
+    }
   };
 
   const handleExport = () => {
@@ -117,6 +121,57 @@ export default function DeliveriesView() {
     downloadCsv('deliveries.csv', [
       ['Delivery ID', 'Order ID', 'Type', 'Tracking ID', 'Delivery Person', 'Place', 'Status'],
       ...filtered.map((d) => [d.id, d.orderId, d.method, d.tracking, d.driver || '-', d.place, STATUS_STYLE[d.status].label]),
+    ]);
+  };
+
+  /* ---------- bulk actions (on the ticked rows) ---------- */
+  const chosen = deliveries.filter((d) => selected.has(d.id));
+  const clearSelection = () => setSelected(new Set());
+
+  const bulkStatus = async (status: DeliveryStatus) => {
+    if (!chosen.length || bulkBusy) return;
+    setBulkBusy(true);
+    let done = 0;
+    try {
+      for (const d of chosen) {
+        if (d.status === status) continue;
+        const saved = await saveDelivery({ ...d, status }, false);
+        setDeliveries((prev) => prev.map((x) => (x.id === saved.id ? saved : x)));
+        done += 1;
+      }
+      addToast(`${done} deliver${done === 1 ? 'y' : 'ies'} marked ${STATUS_STYLE[status].label}.`, 'success');
+      clearSelection();
+    } catch (e) {
+      addToast(`${e instanceof Error ? e.message : 'Could not update deliveries.'} (${done} updated before it stopped.)`, 'error');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const bulkRemove = async () => {
+    setBulkDelete(false);
+    if (!chosen.length || bulkBusy) return;
+    setBulkBusy(true);
+    let done = 0;
+    try {
+      for (const d of chosen) {
+        await deleteDelivery(d.id);
+        setDeliveries((prev) => prev.filter((x) => x.id !== d.id));
+        done += 1;
+      }
+      addToast(`${done} deliver${done === 1 ? 'y' : 'ies'} cancelled.`, 'success');
+      clearSelection();
+    } catch (e) {
+      addToast(`${e instanceof Error ? e.message : 'Could not remove deliveries.'} (${done} removed before it stopped.)`, 'error');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const exportChosen = () => {
+    downloadCsv('deliveries-selected.csv', [
+      ['Delivery ID', 'Order ID', 'Type', 'Tracking ID', 'Delivery Person', 'Place', 'Status'],
+      ...chosen.map((d) => [d.id, d.orderId, d.method, d.tracking, d.driver || '-', d.place, STATUS_STYLE[d.status].label]),
     ]);
   };
 
@@ -208,6 +263,40 @@ export default function DeliveriesView() {
             </div>
           </div>
         </div>
+
+        {/* Bulk actions */}
+        {chosen.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 border-t border-[#BFDBFE] bg-[#EFF6FF] px-4 py-2.5">
+            <span className="text-xs font-bold text-[#1D4ED8]">{chosen.length} selected</span>
+            {filtered.length > chosen.length && (
+              <button type="button" onClick={() => setSelected(new Set(filtered.map((d) => d.id)))} className="text-xs font-semibold text-[#2563EB] hover:underline">
+                Select all {filtered.length}
+              </button>
+            )}
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <select
+                disabled={bulkBusy}
+                value=""
+                onChange={(e) => e.target.value && bulkStatus(e.target.value as DeliveryStatus)}
+                className="h-8 rounded-lg border border-[#BFDBFE] bg-white px-2 text-xs font-semibold text-[#334155] disabled:opacity-50"
+              >
+                <option value="">{bulkBusy ? 'Updating...' : 'Mark as...'}</option>
+                {Object.entries(STATUS_STYLE).map(([k, v]) => (
+                  <option key={k} value={k}>{v.label}</option>
+                ))}
+              </select>
+              <button type="button" onClick={exportChosen} disabled={bulkBusy} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#BFDBFE] bg-white px-3 text-xs font-semibold text-[#334155] hover:bg-slate-50 disabled:opacity-50">
+                <Download size={13} /> Export selected
+              </button>
+              <button type="button" onClick={() => setBulkDelete(true)} disabled={bulkBusy} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50">
+                <X size={13} /> Cancel selected
+              </button>
+              <button type="button" onClick={clearSelection} disabled={bulkBusy} className="h-8 rounded-lg px-2 text-xs font-semibold text-[#64748B] hover:underline">
+                Clear
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Table */}
         <div className="min-h-0 flex-1 overflow-auto border-t border-[#E2E8F0]">
@@ -342,6 +431,15 @@ export default function DeliveriesView() {
       />
 
       <ConfirmModal
+        open={bulkDelete}
+        title={`Cancel ${chosen.length} deliveries?`}
+        message={<>The {chosen.length} selected deliveries will be removed from the dispatch list.</>}
+        confirmLabel="Cancel Deliveries"
+        onCancel={() => setBulkDelete(false)}
+        onConfirm={bulkRemove}
+      />
+
+      <ConfirmModal
         open={Boolean(cancelTarget)}
         title="Cancel this delivery?"
         message={
@@ -352,12 +450,17 @@ export default function DeliveriesView() {
         }
         confirmLabel="Cancel Delivery"
         onCancel={() => setCancelTarget(null)}
-        onConfirm={() => {
-          if (cancelTarget) {
-            updateDeliveries((prev) => prev.filter((x) => x.id !== cancelTarget.id));
-            addToast(`Delivery ${cancelTarget.id} cancelled.`, 'success');
-          }
+        onConfirm={async () => {
+          const target = cancelTarget;
           setCancelTarget(null);
+          if (!target) return;
+          try {
+            await deleteDelivery(target.id);
+            setDeliveries((prev) => prev.filter((x) => x.id !== target.id));
+            addToast(`Delivery ${target.id} cancelled.`, 'success');
+          } catch (e) {
+            addToast(e instanceof Error ? e.message : 'Could not remove delivery.', 'error');
+          }
         }}
       />
     </>

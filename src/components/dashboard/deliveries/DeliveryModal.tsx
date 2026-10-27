@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import type { Delivery, DeliveryMethod, DeliveryStatus, DispatchOrder } from '@/types/delivery';
 import { TIME_SLOTS } from '@/data/deliveries';
-import { fetchOrders } from '@/lib/orders';
+import { fetchDispatchOrders } from '@/lib/deliveryStore';
 import { ModalShell, inputCls, textareaCls, labelCls, btnGhost, btnPrimary, lkr } from '@/components/dashboard/shared/UiKit';
 
 export type DeliveryModalMode = 'create' | 'edit' | 'view';
@@ -31,7 +31,7 @@ interface DeliveryModalProps {
   delivery: Delivery | null;
   nextSequence: number;
   onClose: () => void;
-  onSave: (delivery: Delivery, isNew: boolean) => void;
+  onSave: (delivery: Delivery, isNew: boolean) => void | Promise<void>;
   onEditRequest: (delivery: Delivery) => void;
 }
 
@@ -112,21 +112,8 @@ export default function DeliveryModal({
   useEffect(() => {
     if (mode !== 'create') return;
     let cancelled = false;
-    fetchOrders().then((list) => {
-      if (cancelled) return;
-      setDispatchOrders(
-        list
-          .filter((o) => o.status !== 'delivered' && o.status !== 'canceled')
-          .map((o): DispatchOrder => ({
-            orderId: o.orderId,
-            badge: o.status === 'pending' ? 'Pending Pack' : o.status === 'processing' ? 'Ready to Dispatch' : 'Standard',
-            total: Number(o.totalValue ?? 0),
-            customer: o.customerName,
-            phone: o.phone ?? '',
-            place: [o.city, o.district].filter(Boolean).join(', '),
-            address: o.shippingAddress ?? '',
-          }))
-      );
+    fetchDispatchOrders().then((list) => {
+      if (!cancelled) setDispatchOrders(list);
     });
     return () => {
       cancelled = true;

@@ -1,4 +1,5 @@
 import { DEMO_SESSION_KEY, readDemoTeams, type DemoSession } from '@/lib/demoAuth';
+import { apiV1Url } from '@/lib/backendUrl';
 
 export const LEADS_KEY = 'magnify-crm-leads';
 export const TARGETS_KEY = 'magnify-crm-targets';
@@ -103,6 +104,286 @@ export function writeTargets(t: Record<string, Target>): void {
   const ch = bc();
   ch?.postMessage('targets');
   ch?.close();
+}
+
+/* ---------- backend (MongoDB) ----------
+ * Leads and targets live in the backend. localStorage is only a read cache so the sync
+ * readers (reports, finance, overview) keep working and the page shows something offline. */
+const JSON_HEADERS = { 'Content-Type': 'application/json' };
+const LEADS_MIGRATED_KEY = 'magnify-crm-leads-migrated';
+const TARGETS_MIGRATED_KEY = 'magnify-crm-targets-migrated';
+
+/** Cache write without a cross-tab ping (so refreshes do not trigger each other). */
+function cacheLeads(leads: Lead[]): void {
+  try {
+    localStorage.setItem(LEADS_KEY, JSON.stringify(leads));
+  } catch (e) {
+    console.error('Could not cache leads.', e);
+  }
+}
+function cacheTargets(t: Record<string, Target>): void {
+  try {
+    localStorage.setItem(TARGETS_KEY, JSON.stringify(t));
+  } catch (e) {
+    console.error('Could not cache targets.', e);
+  }
+}
+
+const flag = (k: string) => {
+  try {
+    return localStorage.getItem(k) === '1';
+  } catch {
+    return false;
+  }
+};
+const setFlag = (k: string) => {
+  try {
+    localStorage.setItem(k, '1');
+  } catch {}
+};
+
+const normalizeLead = (r: Partial<Lead>): Lead => ({
+  id: String(r.id ?? ''),
+  dateAdded: String(r.dateAdded ?? ''),
+  business: String(r.business ?? ''),
+  phone: String(r.phone ?? ''),
+  source: String(r.source ?? ''),
+  callStatus: String(r.callStatus ?? 'Not Contacted'),
+  result: String(r.result ?? ''),
+  product: String(r.product ?? ''),
+  status: (LEAD_STATUSES as readonly string[]).includes(String(r.status)) ? (r.status as LeadStatus) : 'New',
+  nextFollowUp: String(r.nextFollowUp ?? ''),
+  owner: String(r.owner ?? ''),
+  email: String(r.email ?? ''),
+  address: String(r.address ?? ''),
+  notes: String(r.notes ?? ''),
+  history: Array.isArray(r.history) ? (r.history as FollowUp[]) : [],
+  ...(r.customerId ? { customerId: String(r.customerId) } : {}),
+  ...(r.order ? { order: r.order as OrderInfo } : {}),
+});
+
+const apiError = async (res: Response, fallback: string) => {
+  if (res.status >= 500) return 'Server is not reachable. Check that the backend is running.';
+  try {
+    const j = await res.json();
+    const m = j?.message;
+    return Array.isArray(m) ? m.join(', ') : String(m || fallback);
+  } catch {
+    return fallback;
+  }
+};
+
+/** null = backend unreachable. */
+export async function fetchLeads(): Promise<Lead[] | null> {
+  try {
+    const res = await fetch(apiV1Url('/leads'), { cache: 'no-store' });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const list: Partial<Lead>[] = Array.isArray(j) ? j : Array.isArray(j?.data) ? j.data : [];
+    return list.map(normalizeLead);
+  } catch {
+    return null;
+  }
+}
+
+/** Fields the backend accepts when saving a lead (id and dateAdded never change). */
+const leadBody = (l: Lead) => ({
+  business: l.business,
+  phone: l.phone,
+  source: l.source,
+  callStatus: l.callStatus,
+  result: l.result,
+  product: l.product,
+  status: l.status,
+  nextFollowUp: l.nextFollowUp,
+  owner: l.owner,
+  email: l.email,
+  address: l.address,
+  notes: l.notes,
+  history: l.history,
+  ...(l.customerId ? { customerId: l.customerId } : {}),
+  ...(l.order ? { order: l.order } : {}),
+});
+
+let leadsInflight: Promise<Lead[]> | null = null;
+
+/** Loads leads from the backend into the cache. Old local leads are uploaded once. */
+export function refreshLeads(): Promise<Lead[]> {
+  if (leadsInflight) return leadsInflight;
+  leadsInflight = (async () => {
+    const remote = await fetchLeads();
+    if (remote === null) return readLeads();
+    if (!flag(LEADS_MIGRATED_KEY)) {
+      const local = readLeads();
+      if (remote.length === 0 && local.length) {
+        for (const l of [...local].reverse()) {
+          try {
+            await fetch(apiV1Url('/leads'), {
+              method: 'POST',
+              headers: JSON_HEADERS,
+              body: JSON.stringify({ id: l.id, dateAdded: l.dateAdded, ...leadBody(l) }),
+            });
+          } catch {
+            break;
+          }
+        }
+        const again = await fetchLeads();
+        if (again) {
+          setFlag(LEADS_MIGRATED_KEY);
+          cacheLeads(again);
+          return again;
+        }
+        return local;
+      }
+      setFlag(LEADS_MIGRATED_KEY);
+    }
+    cacheLeads(remote);
+    return remote;
+  })().finally(() => {
+    leadsInflight = null;
+  });
+  return leadsInflight;
+}
+
+/** Applies the difference between two lead lists to the backend (create / update / delete). Throws on failure. */
+export async function syncLeads(before: Lead[], after: Lead[]): Promise<void> {
+  const old = new Map(before.map((l) => [l.id, l]));
+  const kept = new Set(after.map((l) => l.id));
+  const call = async (url: string, method: string, body: unknown, fallback: string) => {
+    let res: Response;
+    try {
+      res = await fetch(url, { method, headers: JSON_HEADERS, body: body === undefined ? undefined : JSON.stringify(body) });
+    } catch {
+      throw new Error('Could not reach the server. Changes were not saved.');
+    }
+    if (!res.ok && !(method === 'DELETE' && res.status === 404)) throw new Error(await apiError(res, fallback));
+  };
+
+  for (const l of [...after].reverse()) {
+    const prev = old.get(l.id);
+    if (!prev) {
+      await call(apiV1Url('/leads'), 'POST', { id: l.id, dateAdded: l.dateAdded, ...leadBody(l) }, 'Could not save lead.');
+    } else if (JSON.stringify(leadBody(prev)) !== JSON.stringify(leadBody(l))) {
+      await call(apiV1Url(`/leads/${encodeURIComponent(l.id)}`), 'PATCH', leadBody(l), 'Could not save lead.');
+    }
+  }
+  for (const l of before) {
+    if (!kept.has(l.id)) await call(apiV1Url(`/leads/${encodeURIComponent(l.id)}`), 'DELETE', undefined, 'Could not delete lead.');
+  }
+  cacheLeads(after);
+  const ch = bc();
+  ch?.postMessage('leads');
+  ch?.close();
+}
+
+/** Uploads imported leads in chunks. Leads whose ID already exists in the database are skipped. */
+export async function importLeads(
+  leads: Lead[],
+  onProgress?: (done: number, total: number) => void
+): Promise<{ created: number; skipped: number }> {
+  let created = 0;
+  let skipped = 0;
+  const SIZE = 100;
+  for (let i = 0; i < leads.length; i += SIZE) {
+    const chunk = leads.slice(i, i + SIZE).map((l) => ({
+      ...(l.id ? { id: l.id } : {}),
+      dateAdded: l.dateAdded,
+      ...leadBody(l),
+    }));
+    let res: Response;
+    try {
+      res = await fetch(apiV1Url('/leads/import'), {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ leads: chunk }),
+      });
+    } catch {
+      throw new Error(`Could not reach the server. ${created} lead(s) were imported before it stopped.`);
+    }
+    if (!res.ok) throw new Error(`${await apiError(res, 'Import failed.')} (${created} lead(s) imported before it stopped.)`);
+    const j = await res.json().catch(() => null);
+    created += Number(j?.created ?? 0);
+    skipped += Number(j?.skipped ?? 0);
+    onProgress?.(Math.min(i + SIZE, leads.length), leads.length);
+  }
+  const fresh = await fetchLeads();
+  if (fresh) {
+    cacheLeads(fresh);
+    const ch = bc();
+    ch?.postMessage('leads');
+    ch?.close();
+  }
+  return { created, skipped };
+}
+
+export async function fetchTargets(): Promise<Record<string, Target> | null> {
+  try {
+    const res = await fetch(apiV1Url('/leads/targets'), { cache: 'no-store' });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const raw: Record<string, Partial<Target>> = j?.data && typeof j.data === 'object' ? j.data : {};
+    return Object.fromEntries(
+      Object.entries(raw).map(([u, t]) => [
+        u,
+        {
+          monthlyOrders: Number(t.monthlyOrders ?? 0),
+          salesAmount: Number(t.salesAmount ?? 0),
+          dailyCalls: Number(t.dailyCalls ?? 0),
+          dailyLeads: Number(t.dailyLeads ?? 0),
+        },
+      ])
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function putTarget(username: string, t: Target): Promise<Response> {
+  return fetch(apiV1Url(`/leads/targets/${encodeURIComponent(username)}`), {
+    method: 'PUT',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(t),
+  });
+}
+
+let targetsInflight: Promise<Record<string, Target>> | null = null;
+
+export function refreshTargets(): Promise<Record<string, Target>> {
+  if (targetsInflight) return targetsInflight;
+  targetsInflight = (async () => {
+    const remote = await fetchTargets();
+    if (remote === null) return readTargets();
+    if (!flag(TARGETS_MIGRATED_KEY)) {
+      const local = readTargets();
+      if (Object.keys(remote).length === 0 && Object.keys(local).length) {
+        for (const [u, t] of Object.entries(local)) await putTarget(u, t).catch(() => null);
+        const again = await fetchTargets();
+        if (again) {
+          setFlag(TARGETS_MIGRATED_KEY);
+          cacheTargets(again);
+          return again;
+        }
+        return local;
+      }
+      setFlag(TARGETS_MIGRATED_KEY);
+    }
+    cacheTargets(remote);
+    return remote;
+  })().finally(() => {
+    targetsInflight = null;
+  });
+  return targetsInflight;
+}
+
+export async function saveTarget(username: string, t: Target): Promise<void> {
+  let res: Response;
+  try {
+    res = await putTarget(username, t);
+  } catch {
+    throw new Error('Could not reach the server. Targets were not saved.');
+  }
+  if (!res.ok) throw new Error(await apiError(res, 'Could not save targets.'));
+  writeTargets({ ...readTargets(), [username]: t });
 }
 
 /** Re-fetch triggers: other tabs, tab focus/visibility, reconnect, and a 30s fallback poll. */

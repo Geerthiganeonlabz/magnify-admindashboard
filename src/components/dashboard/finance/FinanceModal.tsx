@@ -12,7 +12,7 @@ interface Props {
   mode: FinanceModalMode | null;
   tx: Transaction | null;
   onClose: () => void;
-  onSave: (tx: Transaction, isNew: boolean) => void;
+  onSave: (tx: Transaction, isNew: boolean) => void | Promise<void>;
   onEditRequest: (tx: Transaction) => void;
 }
 

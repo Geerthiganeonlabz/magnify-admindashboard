@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   Clock,
   Download,
-  Trash2,
   X,
   RefreshCw,
 } from 'lucide-react';
@@ -201,28 +200,6 @@ export default function OrdersPage() {
     setSelectedIds(new Set());
   };
 
-  // Bulk Delete
-  const handleBulkDelete = async () => {
-    if (selectedIds.size === 0) return;
-
-    const deleted = new Set<string>();
-    let lastError = '';
-    for (const o of orders.filter((x) => selectedIds.has(x.id))) {
-      try {
-        const res = await fetch(apiV1Url(`/orders/${o._id || o.id}`), { method: 'DELETE' });
-        if (!res.ok) throw new Error(await apiError(res, `Could not delete ${o.orderId}.`));
-        deleted.add(o.id);
-      } catch (e) {
-        lastError = e instanceof Error ? e.message : `Could not delete ${o.orderId}.`;
-      }
-    }
-
-    setOrders((prev) => prev.filter((o) => !deleted.has(o.id)));
-    setSelectedIds(new Set());
-    if (deleted.size) addToast(`Deleted ${deleted.size} order${deleted.size > 1 ? 's' : ''} successfully.`, 'success');
-    if (lastError) addToast(lastError, 'error');
-  };
-
   // Export (All or Selected)
   const handleExport = (exportOnlySelected = false) => {
     const listToExport = exportOnlySelected
@@ -395,17 +372,6 @@ export default function OrdersPage() {
             >
               <Download size={13} />
               <span className="hidden sm:inline">Export</span>
-            </button>
-
-            {/* Delete Selected */}
-            <button
-              type="button"
-              onClick={handleBulkDelete}
-              className="inline-flex items-center gap-1 rounded-xl bg-rose-500/20 px-2.5 py-1.5 text-[12px] font-semibold text-rose-300 transition hover:bg-rose-500/30 whitespace-nowrap"
-              title="Delete selected orders"
-            >
-              <Trash2 size={13} />
-              <span className="hidden sm:inline">Delete</span>
             </button>
 
             {/* Clear Selection */}

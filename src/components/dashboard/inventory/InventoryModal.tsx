@@ -20,7 +20,7 @@ interface Props {
   item: InventoryItem | null;
   nextId: string;
   onClose: () => void;
-  onSave: (item: InventoryItem, isNew: boolean) => void;
+  onSave: (item: InventoryItem, isNew: boolean) => void | Promise<void>;
 }
 
 const ROLE_STYLE: Record<string, string> = {
@@ -77,7 +77,6 @@ export default function InventoryModal({ mode, item, nextId, onClose, onSave }: 
         {
           id: nextId,
           name: name.trim(),
-          description: '',
           stock: stockNum,
           unitValue: unitNum,
           history: [{ at: now, role: 'Admin/Director', change: stockNum, totalValue: total, reason: 'Initial Stock' }],

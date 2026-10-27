@@ -23,6 +23,8 @@ type ApiOrder = {
   shippingAddress?: string;
   adminNote?: string;
   createdAt?: string;
+  deliveredAt?: string;
+  imagesDeletedAt?: string;
   items?: {
     productId?: string;
     sku?: string | null;
@@ -105,6 +107,8 @@ export const mapApiOrder = (order: ApiOrder): Order => {
     shippingAddress: order.shippingAddress,
     adminNote: order.adminNote,
     createdAt: order.createdAt,
+    deliveredAt: order.deliveredAt,
+    imagesDeletedAt: order.imagesDeletedAt,
     items: order.items?.map((item) => ({
       productId: item.productId,
       sku: item.sku ?? null,

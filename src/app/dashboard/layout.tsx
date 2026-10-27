@@ -6,12 +6,23 @@ import { usePathname, useRouter } from 'next/navigation'
 import LayoutWrapper from '@/components/layout/LayoutWrapper'
 import { DEMO_SESSION_KEY, type DemoSession } from '@/lib/demoAuth'
 import { getAllowedPages, isPathAllowed, PAGE_OPTIONS } from '@/lib/roles'
+import { refreshTeam } from '@/lib/teamApi'
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
   const [session, setSession] = useState<DemoSession | null>(null)
   const [checkedSession, setCheckedSession] = useState(false)
+  const [teamTick, setTeamTick] = useState(0)
+
+  // Load members/roles from the backend once (also uploads old local data the first time).
+  useEffect(() => {
+    let alive = true
+    refreshTeam().then(() => alive && setTeamTick((t) => t + 1))
+    return () => {
+      alive = false
+    }
+  }, [])
 
   useEffect(() => {
     // One-time cleanup of old sample records saved in this browser (runs before pages mount).
@@ -48,7 +59,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
     setCheckedSession(true)
     router.replace('/login')
-  }, [pathname, router])
+  }, [pathname, router, teamTick])
 
   if (!checkedSession || !session) return null
   return <LayoutWrapper>{children}</LayoutWrapper>

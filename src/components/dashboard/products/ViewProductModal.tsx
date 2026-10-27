@@ -16,8 +16,8 @@ import {
 } from 'lucide-react';
 import type { Product } from '@/types/product';
 import { apiV1Url } from '@/lib/backendUrl';
-import { readInventory } from '@/lib/inventoryStore';
-import { readMaterials, materialCost } from '@/lib/materials';
+import { useInventory } from '@/lib/inventoryStore';
+import { readMaterials, materialCost, useMaterialsSync } from '@/lib/materials';
 
 interface ViewProductModalProps {
   isOpen: boolean;
@@ -101,6 +101,9 @@ export default function ViewProductModal({
     setIsServerPaginated(true);
   }, [isOpen, product?.id]);
 
+  const inventory = useInventory();
+  useMaterialsSync();
+
   if (!isOpen || !product) return null;
 
   const currentStock = Number(product.stockCount ?? 0);
@@ -116,7 +119,7 @@ export default function ViewProductModal({
   // Manufacture cost follows the product's materials (inventory unit values) when they exist.
   const materials = readMaterials(product.sku || product.id);
   const manufactureCost = materials.some((m) => m.qty > 0)
-    ? materialCost(materials, readInventory())
+    ? materialCost(materials, inventory)
     : Number(product.manufactureCost ?? 0);
   const price = Number(product.price ?? 0);
   const unitProfit = price - manufactureCost;

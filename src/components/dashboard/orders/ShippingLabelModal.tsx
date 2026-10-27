@@ -155,7 +155,7 @@ export default function ShippingLabelModal({ order, isOpen, onClose }: ShippingL
         {/* Printable Label Box */}
         <div
           id="printable-shipping-label"
-          className="mx-auto w-full overflow-hidden rounded-2xl border-[3px] border-black bg-white font-sans text-black"
+          className="mx-auto w-full overflow-hidden rounded-2xl border-[3px] border-black bg-white font-sans text-black print:hidden"
           style={{
             maxWidth: '780px',
             WebkitPrintColorAdjust: 'exact',
@@ -318,38 +318,153 @@ export default function ShippingLabelModal({ order, isOpen, onClose }: ShippingL
           </div>
         </div>
 
+        {/* 8 cm wide label - only shown when printing (the preview above is the on-screen version) */}
+        <div id="print-label-80mm" className="hidden print:block">
+          <div className="pl-head">
+            <Image src="/magnify-logo.png" alt="Magnify Creations" width={96} height={32} className="pl-logo" priority />
+            <div className="pl-order">
+              <span className="pl-order-k">ORDER NO.</span>
+              <span className="pl-order-v">{order.orderId}</span>
+            </div>
+          </div>
+          <div className="pl-title">
+            <b>SHIPPING LABEL</b>
+            <span>www.magnifycreation.lk</span>
+          </div>
+          <div className="pl-sec pl-to">
+            <span className="pl-pill">TO (DELIVERY ADDRESS)</span>
+            <p className="pl-name">{order.customerName}</p>
+            <p className="pl-phone">{order.phone || '+94 7X XXX XXXX'}</p>
+            {[addressLine1, addressLine2, addressLine3].filter(Boolean).map((line, i) => (
+              <p key={i} className="pl-line">{line}</p>
+            ))}
+          </div>
+          <div className="pl-sec pl-from">
+            <span className="pl-pill">FROM (SENDER)</span>
+            <p className="pl-small"><b>Magnify (Pvt) Ltd</b>, 125A, KKS Road, Kokuvil Junction, Jaffna, Sri Lanka</p>
+            <p className="pl-small">+94 75 391 2534 &nbsp;|&nbsp; magnifyofficials@gmail.com</p>
+          </div>
+        </div>
+
         <p className="mt-4 text-center text-xs text-[#94A3B8] print:hidden">
           Tip: Click Print Label to print on a thermal sticker printer or standard A4 paper.
         </p>
       </div>
 
-      {/* Global Print Stylesheet ensuring exact reproduction in browser print */}
+      {/* Print stylesheet: the label is printed 8 cm wide */}
       <style jsx global>{`
         @media print {
-          /* Hide everything except shipping label */
           body * {
             visibility: hidden !important;
           }
-          #printable-shipping-label,
-          #printable-shipping-label * {
+          #print-label-80mm,
+          #print-label-80mm * {
             visibility: visible !important;
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
           }
-          #printable-shipping-label {
+          #print-label-80mm {
             position: fixed !important;
-            left: 50% !important;
-            top: 20px !important;
-            transform: translateX(-50%) !important;
-            width: 100% !important;
-            max-width: 760px !important;
-            box-shadow: none !important;
-            border: 3px solid #000000 !important;
-            background: #ffffff !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 80mm !important;
+            box-sizing: border-box !important;
+            border: 0.6mm solid #000 !important;
+            background: #fff !important;
+            color: #000 !important;
+            font-family: Arial, Helvetica, sans-serif !important;
+          }
+          #print-label-80mm .pl-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 2.5mm 3mm;
+            border-bottom: 0.5mm solid #000;
+          }
+          #print-label-80mm .pl-logo {
+            width: 22mm !important;
+            height: auto !important;
+            flex-shrink: 1;
+            object-fit: contain;
+          }
+          #print-label-80mm .pl-order {
+            border: 0.5mm solid #000;
+            border-radius: 1.5mm;
+            padding: 1mm 1.5mm;
+            text-align: left;
+            flex-shrink: 0;
+          }
+          #print-label-80mm .pl-order-k {
+            display: block;
+            font-size: 6pt;
+            font-weight: 900;
+            letter-spacing: 0.4pt;
+          }
+          #print-label-80mm .pl-order-v {
+            display: block;
+            font-family: 'Courier New', monospace;
+            font-size: 6.5pt;
+            font-weight: 900;
+            white-space: nowrap;
+          }
+          #print-label-80mm .pl-title {
+            text-align: center;
+            padding: 1.5mm 0;
+            border-bottom: 0.5mm solid #000;
+          }
+          #print-label-80mm .pl-title b {
+            display: block;
+            font-size: 11pt;
+            font-weight: 900;
+            letter-spacing: 0.8pt;
+          }
+          #print-label-80mm .pl-title span {
+            font-size: 7pt;
+            font-weight: 700;
+          }
+          #print-label-80mm .pl-sec {
+            padding: 2.5mm 3mm;
+          }
+          #print-label-80mm .pl-to {
+            border-bottom: 0.5mm solid #000;
+          }
+          #print-label-80mm .pl-pill {
+            display: inline-block;
+            background: #000 !important;
+            color: #fff !important;
+            font-size: 6.5pt;
+            font-weight: 900;
+            letter-spacing: 0.4pt;
+            padding: 0.8mm 2mm;
+            border-radius: 1mm;
+            margin-bottom: 1.5mm;
+          }
+          #print-label-80mm p {
+            margin: 0;
+          }
+          #print-label-80mm .pl-name {
+            font-size: 12pt;
+            font-weight: 900;
+            line-height: 1.2;
+          }
+          #print-label-80mm .pl-phone {
+            font-size: 11pt;
+            font-weight: 900;
+            margin-bottom: 1mm;
+          }
+          #print-label-80mm .pl-line {
+            font-size: 9.5pt;
+            font-weight: 800;
+            line-height: 1.4;
+          }
+          #print-label-80mm .pl-small {
+            font-size: 7.5pt;
+            font-weight: 700;
+            line-height: 1.4;
           }
           @page {
             size: auto;
-            margin: 8mm;
+            margin: 6mm;
           }
         }
       `}</style>
