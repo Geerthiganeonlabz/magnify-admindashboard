@@ -65,6 +65,13 @@ export default function Sidebar({
     }
   }, []);
 
+  // Re-render when members/roles are refreshed from the backend (page access may change).
+  useEffect(() => {
+    const bump = () => setSession((s) => (s ? { ...s } : s));
+    window.addEventListener('magnify-team-updated', bump);
+    return () => window.removeEventListener('magnify-team-updated', bump);
+  }, []);
+
   const allowed = getAllowedPages(session);
   const navItems = [...BASE_NAV_ITEMS, ...ADMIN_NAV_ITEMS].filter((item) => allowed.includes(item.href));
   const baseCount = navItems.filter((item) => BASE_NAV_ITEMS.some((b) => b.href === item.href)).length;

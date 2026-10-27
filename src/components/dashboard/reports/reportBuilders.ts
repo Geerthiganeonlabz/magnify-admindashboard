@@ -2,9 +2,10 @@ import type { Order } from '@/types/order';
 import type { ReportDoc, Cell, Tone } from './reportPdf';
 import { INITIAL_INVENTORY } from '@/data/inventory';
 import { getInventoryStatus } from '@/types/inventory';
-import { readDeliveries } from '@/lib/deliveryStore';
-import { readTransactions } from '@/components/dashboard/finance/financeStore';
-import { readLeads, readCrmUsers } from '@/lib/crm';
+import { readDeliveries, refreshDeliveries } from '@/lib/deliveryStore';
+import { readTransactions, refreshTransactions } from '@/components/dashboard/finance/financeStore';
+import { readLeads, readCrmUsers, refreshLeads } from '@/lib/crm';
+import { refreshTeam } from '@/lib/teamApi';
 import { fetchOrders } from '@/lib/orders';
 import { apiV1Url } from '@/lib/backendUrl';
 
@@ -56,7 +57,11 @@ const arr = (j: unknown): unknown[] => {
 };
 
 export async function loadReportData(): Promise<ReportData> {
-  const [orders, customers, products] = await Promise.all([
+  const [, , , , orders, customers, products] = await Promise.all([
+    refreshTransactions().catch(() => null),
+    refreshDeliveries().catch(() => null),
+    refreshLeads().catch(() => null),
+    refreshTeam().catch(() => null),
     fetchOrders().catch(() => [] as Order[]),
     fetch('/api/v1/customers?page=1&limit=10000')
       .then((r) => (r.ok ? r.json() : []))

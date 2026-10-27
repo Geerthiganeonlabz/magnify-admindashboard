@@ -60,6 +60,7 @@ export function getAllowedPages(session: DemoSession | null): string[] {
     const member = readDemoTeams()
       .flatMap((t) => t.members)
       .find((m) => m.username.toLowerCase() === session.username.toLowerCase());
+    if (!member && session.allowedPages?.length) return session.allowedPages;
     const roles = readRoles();
     const role = roles.find((r) => r.name === member?.role) ?? roles.find((r) => r.name === DEFAULT_ROLE_NAME) ?? DEFAULT_ROLES[0];
     return ['/dashboard', ...role.pages.filter((h) => PAGE_OPTIONS.some((p) => p.href === h))];

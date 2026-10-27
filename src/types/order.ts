@@ -38,5 +38,9 @@ export interface Order {
   discount?: number;
   totalValue?: number;
   createdAt?: string;
+  /** When the order was marked delivered (customer photos are removed 7 days later). */
+  deliveredAt?: string;
+  /** Set once the customer's uploaded photos were deleted from storage. */
+  imagesDeletedAt?: string;
   items?: OrderItem[];
 }

@@ -1,10 +1,11 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { BarChart3, Boxes, CalendarDays, Download, FileText, Loader2, PackageSearch, Receipt, TrendingUp, Truck, Users, ListChecks } from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
+import { BarChart3, Boxes, CalendarDays, Download, Eye, FileText, Loader2, PackageSearch, Receipt, TrendingUp, Truck, Users, ListChecks } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useToastStore } from '@/store/toastStore';
 import { downloadReportPdf } from './reportPdf';
+import ReportPreview from './ReportPreview';
 import { buildReport, loadReportData, type ReportData, type ReportId, type Range } from './reportBuilders';
 
 interface Card {
@@ -39,8 +40,11 @@ export default function ReportsView() {
   const [preset, setPreset] = useState<Preset>('month');
   const [from, setFrom] = useState(toInput(new Date(today.getFullYear(), today.getMonth(), 1)));
   const [to, setTo] = useState(toInput(today));
-  const [busy, setBusy] = useState<ReportId | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [selected, setSelected] = useState<ReportId | null>(null);
   const [data, setData] = useState<ReportData | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const previewRef = useRef<HTMLDivElement>(null);
 
   const range: Range = useMemo(() => {
     const n = new Date();
@@ -56,18 +60,54 @@ export default function ReportsView() {
 
   const invalid = range.from > range.to;
 
-  const download = async (id: ReportId) => {
+  const doc = useMemo(() => {
+    if (!selected || !data || invalid) return null;
+    try {
+      return buildReport(selected, data, range);
+    } catch {
+      return null;
+    }
+  }, [selected, data, range, invalid]);
+
+  const preview = async (id: ReportId) => {
     if (invalid) return addToast('From date must be before To date.', 'error');
     setBusy(id);
+    setSelected(id);
     try {
-      const d = data ?? (await loadReportData());
-      if (!data) setData(d);
+      setData(await loadReportData());
+      setTimeout(() => previewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : 'Failed to load report.', 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const quickDownload = async (id: ReportId) => {
+    if (invalid) return addToast('From date must be before To date.', 'error');
+    setBusy(`dl:${id}`);
+    try {
+      const d = await loadReportData();
+      setData(d);
       await downloadReportPdf(buildReport(id, d, range));
       addToast('Report downloaded.', 'success');
     } catch (e) {
       addToast(e instanceof Error ? e.message : 'Failed to generate report.', 'error');
     } finally {
       setBusy(null);
+    }
+  };
+
+  const download = async () => {
+    if (!doc) return;
+    setDownloading(true);
+    try {
+      await downloadReportPdf(doc);
+      addToast('Report downloaded.', 'success');
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : 'Failed to generate report.', 'error');
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -115,7 +155,7 @@ export default function ReportsView() {
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {CARDS.map(({ id, title, desc, badge, badgeTone, icon: Icon }) => (
-          <div key={id} className="flex flex-col rounded-xl border border-[#E2E8F0] bg-white p-4 shadow-xs transition hover:border-[#BFDBFE] hover:shadow-sm">
+          <div key={id} className={`flex flex-col rounded-xl border bg-white p-4 shadow-xs transition hover:border-[#BFDBFE] hover:shadow-sm ${selected === id ? 'border-[#2563EB] ring-2 ring-[#2563EB]/15' : 'border-[#E2E8F0]'}`}>
             <div className="flex items-start justify-between">
               <span className="flex size-9 items-center justify-center rounded-lg bg-[#EFF6FF] text-[#2563EB]">
                 <Icon size={17} />
@@ -124,21 +164,56 @@ export default function ReportsView() {
             </div>
             <h3 className="mt-3 text-xs font-bold text-[#0F172A]">{title}</h3>
             <p className="mt-1 flex-1 text-xs leading-5 text-[#64748B]">{desc}</p>
-            <button
-              type="button"
-              disabled={busy !== null}
-              onClick={() => download(id)}
-              className="mt-3 inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-[#E2E8F0] bg-white text-xs font-semibold text-[#2563EB] hover:bg-blue-50 disabled:opacity-60"
-            >
-              {busy === id ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-              {busy === id ? 'Generating...' : 'Download PDF'}
-            </button>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={busy !== null}
+                onClick={() => preview(id)}
+                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-[#E2E8F0] bg-white text-xs font-semibold text-[#2563EB] hover:bg-blue-50 disabled:opacity-60"
+              >
+                {busy === id ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
+                {busy === id ? 'Loading...' : 'Preview'}
+              </button>
+              <button
+                type="button"
+                disabled={busy !== null}
+                onClick={() => quickDownload(id)}
+                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-[#2563EB] text-xs font-bold text-white hover:bg-[#1D4ED8] disabled:opacity-60"
+              >
+                {busy === `dl:${id}` ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                PDF
+              </button>
+            </div>
           </div>
         ))}
       </div>
 
+      {selected && (
+        <div ref={previewRef} className="mt-5 scroll-mt-4">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold text-[#64748B]">Preview</p>
+            <button
+              type="button"
+              onClick={download}
+              disabled={!doc || downloading}
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-[#2563EB] px-4 text-xs font-bold text-white shadow-xs hover:bg-[#1D4ED8] disabled:opacity-60"
+            >
+              {downloading ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+              {downloading ? 'Generating...' : 'Download PDF'}
+            </button>
+          </div>
+          {doc ? (
+            <ReportPreview doc={doc} />
+          ) : (
+            <div className="flex items-center justify-center gap-2 rounded-xl border border-[#E2E8F0] bg-white p-10 text-xs text-[#64748B]">
+              <Loader2 size={14} className="animate-spin" /> Loading preview...
+            </div>
+          )}
+        </div>
+      )}
+
       <p className="mt-4 flex items-center gap-1.5 text-xs text-[#94A3B8]">
-        <BarChart3 size={13} /> Reports are A4 portrait PDFs and download automatically.
+        <BarChart3 size={13} /> Click Preview on a report, check it below, then press Download PDF.
       </p>
     </div>
   );

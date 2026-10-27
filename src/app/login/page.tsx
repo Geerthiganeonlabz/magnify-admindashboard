@@ -6,7 +6,9 @@ import { Eye, EyeOff, LockKeyhole, UserRound } from 'lucide-react';
 import {
   authenticateDemoUser,
   DEMO_SESSION_KEY,
+  type DemoSession,
 } from '@/lib/demoAuth';
+import { loginAdmin, loginMember } from '@/lib/teamApi';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -14,16 +16,39 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError('');
 
+    setBusy(true);
     try {
-      const session = authenticateDemoUser(username.trim(), password);
-      if (!session) {
-        setError('Username or password is incorrect, or this account is inactive.');
-        return;
+      const u = username.trim();
+      let session: DemoSession | null = null;
+      if (u.includes('@')) {
+        // Administrator: email + password, checked against the database.
+        const result = await loginAdmin(u, password);
+        if ('session' in result) {
+          session = result.session;
+          if (result.token) localStorage.setItem('adminToken', result.token);
+        } else {
+          setError(result.error);
+          return;
+        }
+      } else {
+        // Team members sign in against the backend.
+        const result = await loginMember(u, password);
+        if ('session' in result) {
+          session = result.session;
+        } else {
+          // Old local accounts that have not been uploaded to the backend yet.
+          session = result.denied ? authenticateDemoUser(u, password) : null;
+          if (!session) {
+            setError(result.error);
+            return;
+          }
+        }
       }
 
       localStorage.setItem(DEMO_SESSION_KEY, JSON.stringify(session));
@@ -35,6 +60,8 @@ export default function LoginPage() {
           ? loginError.message
           : 'Unable to sign in. Please try again.',
       );
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -58,7 +85,7 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit} className="space-y-5">
           <label className="block text-sm font-semibold text-[#334155]">
-            Username
+            Email or username
             <span className="mt-1.5 flex h-12 items-center gap-3 rounded-xl border border-[#CBD5E1] px-3 focus-within:border-[#2563EB]">
               <UserRound size={18} className="text-[#94A3B8]" />
               <input
@@ -66,7 +93,7 @@ export default function LoginPage() {
                 autoComplete="username"
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
-                placeholder="Enter your username"
+                placeholder="Admin email or your username"
                 className="w-full bg-transparent text-sm font-normal outline-none"
               />
             </span>
@@ -104,9 +131,10 @@ export default function LoginPage() {
 
           <button
             type="submit"
-            className="h-12 w-full rounded-xl bg-[#2563EB] text-sm font-bold text-white transition hover:bg-[#1D4ED8]"
+            disabled={busy}
+            className="h-12 w-full rounded-xl bg-[#2563EB] text-sm font-bold text-white transition hover:bg-[#1D4ED8] disabled:opacity-60"
           >
-            Sign in
+            {busy ? 'Signing in...' : 'Sign in'}
           </button>
         </form>
 

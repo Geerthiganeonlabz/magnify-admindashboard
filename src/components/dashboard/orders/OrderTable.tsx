@@ -1,6 +1,6 @@
 'use client';
 
-import { Eye, Trash2, CreditCard, Banknote, Building2 } from 'lucide-react';
+import { Eye, CreditCard, Banknote, Building2 } from 'lucide-react';
 import type { Order } from '@/types/order';
 
 interface OrderTableProps {
@@ -10,7 +10,8 @@ interface OrderTableProps {
   onToggleSelectAll: (checked: boolean) => void;
   onToggleSelectOne: (id: string) => void;
   onView: (order: Order) => void;
-  onDelete: (order: Order) => void;
+  /** Orders can no longer be deleted from the table (unsafe); kept optional so callers need no change. */
+  onDelete?: (order: Order) => void;
 }
 
 function formatDate(dateInput?: string | Date) {
@@ -110,7 +111,6 @@ export default function OrderTable({
   onToggleSelectAll,
   onToggleSelectOne,
   onView,
-  onDelete,
 }: OrderTableProps) {
   const isAllSelected = orders.length > 0 && orders.every((o) => selectedIds.has(o.id));
 
@@ -312,16 +312,6 @@ export default function OrderTable({
                         aria-label={`View order ${order.orderId}`}
                       >
                         <Eye size={14} />
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => onDelete(order)}
-                        className="flex size-7 items-center justify-center rounded-lg border border-[#E2E8F0] bg-white text-[#94A3B8] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600"
-                        title="Delete order"
-                        aria-label={`Delete order ${order.orderId}`}
-                      >
-                        <Trash2 size={14} />
                       </button>
                     </div>
                   </td>

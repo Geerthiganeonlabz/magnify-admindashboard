@@ -14,7 +14,6 @@ export interface StockLogEntry {
 export interface InventoryItem {
   id: string; // ITEM-0001
   name: string;
-  description: string;
   stock: number;
   unitValue: number;
   history: StockLogEntry[];

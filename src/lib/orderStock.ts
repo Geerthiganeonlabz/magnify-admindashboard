@@ -1,7 +1,7 @@
 import type { Order, OrderStatus } from '@/types/order';
 import type { InventoryItem } from '@/types/inventory';
-import { readInventory, writeInventory } from '@/lib/inventoryStore';
-import { type Material, readMaterials, producibleUnits } from '@/lib/materials';
+import { refreshInventory, writeInventory, pushInventoryChanges } from '@/lib/inventoryStore';
+import { type Material, readMaterials, refreshMaterials, producibleUnits } from '@/lib/materials';
 import { apiV1Url } from '@/lib/backendUrl';
 
 const KEY = 'magnify-order-stock-applied';
@@ -31,6 +31,7 @@ const stockStatus = (n: number) => (n > 10 ? 'In Stock' : n > 4 ? 'Low Stock' : 
 
 /** Find the materials of an order line. Materials are saved under the product SKU (e.g. MG-01). */
 async function materialsFor(item: NonNullable<Order['items']>[number]): Promise<Material[]> {
+  await refreshMaterials().catch(() => null);
   const direct = (item.sku && readMaterials(item.sku)) || (item.productId && readMaterials(item.productId)) || [];
   if (direct.length || !item.productId) return direct;
   try {
@@ -59,7 +60,8 @@ export async function syncOrderStock(order: Order, next: OrderStatus): Promise<s
   if (!sign) return null;
 
   const items = order.items ?? [];
-  let inventory: InventoryItem[] = readInventory();
+  const before: InventoryItem[] = await refreshInventory();
+  let inventory: InventoryItem[] = before;
   const touched: { productId?: string; materials: Material[] }[] = [];
   const now = new Date().toISOString();
 
@@ -92,6 +94,7 @@ export async function syncOrderStock(order: Order, next: OrderStatus): Promise<s
   }
 
   writeInventory(inventory);
+  await pushInventoryChanges(before, inventory);
   writeApplied(sign > 0 ? [...applied, key] : applied.filter((k) => k !== key));
   if (!touched.length) return null;
 

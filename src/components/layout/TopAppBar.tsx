@@ -12,8 +12,23 @@ type NotifItem = {
   title: string;
   sub: string;
   href: string;
+  /** Small third line, e.g. "Pending · 2 h ago". */
+  meta?: string;
   createdAt?: string;
 };
+
+function timeAgo(iso?: string): string {
+  if (!iso) return "";
+  const diff = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(diff) || diff < 0) return "";
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} min ago`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} h ago`;
+  const d = Math.floor(h / 24);
+  return d === 1 ? "yesterday" : `${d} days ago`;
+}
 
 type ApiOrder = {
   _id?: string;
@@ -65,8 +80,9 @@ async function fetchNotifications(): Promise<NotifItem[]> {
         items.push({
           id: `order-${o._id || o.orderId}`,
           type: "order",
-          title: `New order #${o.orderId}`,
-          sub: `${o.customerName} · ${o.status.charAt(0) + o.status.slice(1).toLowerCase()}`,
+          title: `New order · ${o.customerName}`,
+          sub: `#${o.orderId}`,
+          meta: [o.status.charAt(0) + o.status.slice(1).toLowerCase(), timeAgo(o.createdAt)].filter(Boolean).join(" · "),
           href: `/dashboard/orders`,
           createdAt: o.createdAt,
         });
@@ -137,6 +153,26 @@ export default function TopAppBar({
   const [unreadCount, setUnreadCount] = useState(0);
   const [demoSession, setDemoSession] = useState<DemoSession | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const bellRef = useRef<HTMLDivElement | null>(null);
+
+  // Close the dropdown when clicking/tapping anywhere outside it, or pressing Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: MouseEvent | TouchEvent) => {
+      if (bellRef.current && !bellRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("touchstart", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("touchstart", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
 
   useEffect(() => {
     const savedSession = localStorage.getItem(DEMO_SESSION_KEY);
@@ -279,7 +315,7 @@ export default function TopAppBar({
         </button>
 
         <div className="flex items-center gap-2.5 sm:gap-4 ml-auto">
-          <div className="relative">
+          <div className="relative" ref={bellRef}>
             <button
               onClick={handleBellClick}
               className="flex size-9 items-center justify-center rounded-full transition hover:bg-slate-100"
@@ -309,7 +345,7 @@ export default function TopAppBar({
                 className="
       absolute right-0 top-full mt-3
       z-[99999]
-      flex w-[calc(100vw-2rem)] max-w-[250px]
+      flex w-[calc(100vw-2rem)] max-w-[340px]
       flex-col
       overflow-hidden
       rounded-2xl
@@ -352,7 +388,7 @@ export default function TopAppBar({
                   flex-1
                   overflow-y-auto
                   bg-white
-                  max-h-[110px]
+                  max-h-[50vh]
                   sm:max-h-[360px]
                 "
                 >
@@ -401,13 +437,19 @@ export default function TopAppBar({
                             </span>
 
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-semibold leading-snug text-[#1A1C1F]">
+                              <p className="break-words text-sm font-semibold leading-snug text-[#1A1C1F]">
                                 {n.title}
                               </p>
 
-                              <p className="mt-0.5 truncate text-xs font-medium text-[#64748B]">
+                              <p className="mt-0.5 break-all text-xs font-medium text-[#64748B]">
                                 {n.sub}
                               </p>
+
+                              {n.meta && (
+                                <p className="mt-0.5 text-xs font-medium text-[#94A3B8]">
+                                  {n.meta}
+                                </p>
+                              )}
                             </div>
                           </Link>
                         </li>

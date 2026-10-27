@@ -5,8 +5,9 @@ import type { ChangeEvent, KeyboardEvent, WheelEvent } from 'react';
 import { ImagePlus, Images, Trash2, UploadCloud, X, Package } from 'lucide-react';
 import type { Product, ProductFormData } from '@/types/product';
 import MaterialsEditor from './MaterialsEditor';
-import { readInventory } from '@/lib/inventoryStore';
-import { type Material, readMaterials, writeMaterials, materialCost, producibleUnits } from '@/lib/materials';
+import { readInventory, refreshInventory } from '@/lib/inventoryStore';
+import { type Material, readMaterials, refreshMaterials, saveMaterials, materialCost, producibleUnits } from '@/lib/materials';
+import { useToastStore } from '@/store/toastStore';
 import type { InventoryItem } from '@/types/inventory';
 import { ModalShell, inputCls, textareaCls, labelCls, btnGhost, btnPrimary } from '@/components/dashboard/shared/UiKit';
 
@@ -48,6 +49,7 @@ export default function AddProductModal({
 }: AddProductModalProps) {
   const [form, setForm] = useState<ProductFormData>(EMPTY);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { addToast } = useToastStore();
   const [galleryError, setGalleryError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [existingGalleryUrls, setExistingGalleryUrls] = useState<string[]>([]);
@@ -64,6 +66,7 @@ export default function AddProductModal({
   useEffect(() => {
     if (!isOpen) return;
     setInventory(readInventory());
+    refreshInventory().then(setInventory);
     if (editingProduct) {
       setForm({
         name: editingProduct.name ?? '',
@@ -79,7 +82,9 @@ export default function AddProductModal({
         galleryImages: [],
       });
       setExistingGalleryUrls(editingProduct.galleryImageUrls ?? []);
-      setMaterials(readMaterials(editingProduct.sku ?? editingProduct.id ?? ''));
+      const matKey = editingProduct.sku ?? editingProduct.id ?? '';
+      setMaterials(readMaterials(matKey));
+      refreshMaterials().then(() => setMaterials(readMaterials(matKey)));
     } else {
       setMaterials([]);
       setForm({ ...EMPTY, productId: autoProductId });
@@ -176,7 +181,11 @@ export default function AddProductModal({
         removedGalleryUrls,
       });
       if (result !== false) {
-        writeMaterials(productKey, materials.filter((m) => m.qty > 0));
+        try {
+          await saveMaterials(productKey, materials.filter((m) => m.qty > 0));
+        } catch (e) {
+          addToast(e instanceof Error ? e.message : 'Could not save product materials.', 'error');
+        }
         setForm(EMPTY);
         setExistingGalleryUrls([]);
         setRemovedGalleryUrls([]);

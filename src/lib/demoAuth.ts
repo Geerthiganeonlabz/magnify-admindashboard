@@ -23,13 +23,12 @@ export interface DemoSession {
   username: string;
   name: string;
   role: 'admin' | 'member';
+  /** Admin sessions: the admin's email address. */
+  email?: string;
   teamName?: string;
+  /** Pages sent by the backend at sign-in (used until the team cache is loaded). */
+  allowedPages?: string[];
 }
-
-export const DEMO_ADMIN = {
-  username: 'admin',
-  password: 'Admin@123',
-};
 
 export const INITIAL_DEMO_TEAMS: DemoTeam[] = [
   { id: 'TEAM-001', name: 'Sales Team', members: [] },
@@ -60,10 +59,6 @@ export function authenticateDemoUser(
   username: string,
   password: string,
 ): DemoSession | null {
-  if (username === DEMO_ADMIN.username && password === DEMO_ADMIN.password) {
-    return { username: DEMO_ADMIN.username, name: 'Administrator', role: 'admin' };
-  }
-
   const team = readDemoTeams().find((entry) =>
     entry.members.some(
       (member) =>

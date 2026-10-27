@@ -23,6 +23,7 @@ import { apiV1Url } from '@/lib/backendUrl';
 import { syncOrderStock } from '@/lib/orderStock';
 import type { Order, OrderStatus as OrderStatusType, PaymentStatus } from '@/types/order';
 import ShippingLabelModal from './ShippingLabelModal';
+import { ConfirmModal } from '@/components/dashboard/shared/UiKit';
 
 type OrderStatusProps = {
   order: Order | null;
@@ -59,6 +60,8 @@ export default function OrderStatus({
   const [saving, setSaving] = useState(false);
   const [downloadingItemIndex, setDownloadingItemIndex] = useState<number | null>(null);
   const [shippingLabelOpen, setShippingLabelOpen] = useState(false);
+  const [deletePhotosOpen, setDeletePhotosOpen] = useState(false);
+  const [deletingPhotos, setDeletingPhotos] = useState(false);
 
   // Form states
   const [customerName, setCustomerName] = useState('');
@@ -106,13 +109,16 @@ export default function OrderStatus({
       for (let i = 0; i < uploadedImages.length; i++) {
         const url = uploadedImages[i];
         try {
-          const res = await fetch(url);
+          const ext = url.split('.').pop()?.split('?')[0] || 'jpg';
+          const fileName = `${currentOrder.orderId}_${itemName.replace(/\s+/g, '_')}_Photo_${i + 1}.${ext}`;
+          // Downloaded through the backend: the browser cannot fetch the Cloudflare URL directly (CORS).
+          const res = await fetch(apiV1Url(`/orders/photos/download?url=${encodeURIComponent(url)}&name=${encodeURIComponent(fileName)}`));
+          if (!res.ok) throw new Error('download failed');
           const blob = await res.blob();
           const blobUrl = window.URL.createObjectURL(blob);
           const link = document.createElement('a');
           link.href = blobUrl;
-          const ext = url.split('.').pop()?.split('?')[0] || 'jpg';
-          link.download = `${currentOrder.orderId}_${itemName.replace(/\s+/g, '_')}_Photo_${i + 1}.${ext}`;
+          link.download = fileName;
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
@@ -132,10 +138,52 @@ export default function OrderStatus({
     }
   };
 
+  const RETENTION_DAYS = 7;
+  const hasPhotos = items.some((i) => i.uploadedImages?.length);
+  const photosExpireOn = currentOrder.deliveredAt
+    ? new Date(new Date(currentOrder.deliveredAt).getTime() + RETENTION_DAYS * 86400000).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+    : null;
+
+  // Manual clean-up: removes the customer's photos from Cloudflare R2 (delivered orders only).
+  const handleDeletePhotos = async () => {
+    setDeletePhotosOpen(false);
+    setDeletingPhotos(true);
+    try {
+      const res = await fetch(apiV1Url(`/orders/${currentOrder._id || currentOrder.id}/customer-images`), { method: 'DELETE' });
+      if (!res.ok) {
+        let message = 'Could not delete the customer photos.';
+        try {
+          const j = (await res.json()) as { message?: string | string[] };
+          if (j?.message) message = Array.isArray(j.message) ? j.message.join(', ') : j.message;
+        } catch {
+          if (res.status >= 500) message = `Server is not reachable (HTTP ${res.status}). Check that the backend is running.`;
+        }
+        addToast(message, 'error');
+        return;
+      }
+      const updated: Order = {
+        ...currentOrder,
+        imagesDeletedAt: new Date().toISOString(),
+        items: (currentOrder.items ?? []).map((i) => ({ ...i, uploadedImages: [] })),
+      };
+      setCurrentOrder(updated);
+      onUpdated?.(updated);
+      addToast('Customer photos deleted from storage.', 'success');
+    } catch {
+      addToast('Could not delete the customer photos.', 'error');
+    } finally {
+      setDeletingPhotos(false);
+    }
+  };
+
   const handleSave = async () => {
     setSaving(true);
     const updated: Order = {
       ...currentOrder,
+      deliveredAt:
+        orderStatus === 'delivered' && currentOrder.status !== 'delivered'
+          ? new Date().toISOString()
+          : currentOrder.deliveredAt,
       customerName,
       phone,
       email,
@@ -436,13 +484,34 @@ export default function OrderStatus({
                   <p className="text-[12px] text-[#64748B]" style={{ fontSize: '12px' }}>
                     Photos uploaded by the customer for customized magnets & frames.
                   </p>
+                  {currentOrder.status === 'delivered' && hasPhotos && (
+                    <p className="mt-0.5 text-[12px] font-semibold text-amber-600" style={{ fontSize: '12px' }}>
+                      {photosExpireOn
+                        ? `These photos are deleted automatically on ${photosExpireOn} (${RETENTION_DAYS} days after delivery).`
+                        : `These photos are deleted automatically ${RETENTION_DAYS} days after delivery.`}
+                    </p>
+                  )}
                 </div>
+                {currentOrder.status === 'delivered' && hasPhotos && (
+                  <button
+                    type="button"
+                    disabled={deletingPhotos}
+                    onClick={() => setDeletePhotosOpen(true)}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 text-[12px] font-bold text-rose-600 hover:bg-rose-50 disabled:opacity-60"
+                    style={{ fontSize: '12px' }}
+                  >
+                    {deletingPhotos ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                    <span style={{ fontSize: '12px' }}>{deletingPhotos ? 'Deleting...' : 'Delete photos now'}</span>
+                  </button>
+                )}
               </div>
 
               {items.length === 0 || !items.some((i) => i.uploadedImages?.length) ? (
                 <div className="rounded-xl border border-dashed border-[#CBD5E1] p-8 text-center">
                   <p className="text-[12px] text-[#94A3B8]" style={{ fontSize: '12px' }}>
-                    No custom photos were uploaded for this order.
+                    {currentOrder.imagesDeletedAt
+                      ? `Customer photos were deleted from storage on ${new Date(currentOrder.imagesDeletedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}.`
+                      : 'No custom photos were uploaded for this order.'}
                   </p>
                 </div>
               ) : (
@@ -563,6 +632,15 @@ export default function OrderStatus({
           </div>
         </div>
       </div>
+
+      <ConfirmModal
+        open={deletePhotosOpen}
+        title="Delete customer photos?"
+        message={<>The photos the customer uploaded for order <b>{currentOrder.orderId}</b> will be permanently removed from storage. This cannot be undone.</>}
+        confirmLabel="Delete photos"
+        onCancel={() => setDeletePhotosOpen(false)}
+        onConfirm={handleDeletePhotos}
+      />
 
       {/* Shipping Label Printable Preview Modal */}
       <ShippingLabelModal
